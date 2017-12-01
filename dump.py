@@ -42,13 +42,17 @@ def get_usb_iphone():
 	return device
 
 def gen_ipa(target):
-	app_name = file_dict["app"]
-	for key, value in file_dict.items():
-		if key != "app":
-			shutil.move(target+"/"+key, target + "/" + app_name + "/" + value);
-	(shotname,extension) = os.path.splitext(app_name)
-	os.system("zip -qr %s.ipa ./Payload" % shotname);
-	os.system("rm -rf ./Payload");
+	try:
+		app_name = file_dict["app"]
+		for key, value in file_dict.items():
+			if key != "app":
+				shutil.move(target+"/"+key, target + "/" + app_name + "/" + value);
+		(shotname,extension) = os.path.splitext(app_name)
+		os.system("zip -qr %s.ipa ./Payload" % shotname);
+		os.system("rm -rf ./Payload");
+	except Exception as e:
+		print e
+		finished.set();
 
 def on_message(message,data):
 	if message.has_key('payload'):
@@ -116,12 +120,12 @@ def main(target):
 
 if __name__ == "__main__":
 	if len(sys.argv) < 2:
+		print "usage: ./dump.py 微信"
 		sys.exit(0)
 	else:
 		try:
 			main(sys.argv[1])
 		except KeyboardInterrupt:
-			print 2
 			if session:
 				session.detach()
 			sys.exit()
