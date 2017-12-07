@@ -46,9 +46,9 @@ def gen_ipa(target):
 		app_name = file_dict["app"]
 		for key, value in file_dict.items():
 			if key != "app":
-				shutil.move(target+"/"+key, target + "/" + app_name + "/" + value);
+				shutil.move(target +"/"+ key, target + "/" + app_name + "/" + value);
 		(shotname,extension) = os.path.splitext(app_name)
-		os.system("zip -qr %s.ipa ./Payload" % shotname);
+		os.system(u''.join(("zip -qr ", shotname, ".ipa ./Payload")).encode('utf-8').strip());
 		os.system("rm -rf ./Payload");
 	except Exception as e:
 		print e
