@@ -134,6 +134,7 @@ write = getExportFunction("f", "write", "int", ["int", "pointer", "int"]);
 lseek = getExportFunction("f", "lseek", "int64", ["int", "int64", "int"]);
 close = getExportFunction("f", "close", "int", ["int"]);
 remove = getExportFunction("f", "remove", "int", ["pointer"]);
+access = getExportFunction("f", "access", "int", ["pointer", "int"]);
 
 function getDocumentDir() {
     var NSDocumentDirectory = 9;
@@ -209,7 +210,10 @@ function dumpModule(name) {
     var newmodpath = getDocumentDir() + "/" + newmodname;
     var oldmodpath = modules[i].path;
 
-    remove(allocStr(newmodpath));
+
+    if(!access(allocStr(newmodpath),0)){
+        remove(allocStr(newmodpath));
+    }
     
     var fmodule = open(newmodpath, O_CREAT | O_RDWR, 0);
     var foldmodule = open(oldmodpath, O_RDONLY, 0);
