@@ -11,6 +11,9 @@ import threading
 import os
 import shutil
 
+reload(sys)
+sys.setdefaultencoding('utf8')
+
 DUMP_JS = './dump.js'
 APP_JS = './app.js'
 OUTPUT = "Payload"
