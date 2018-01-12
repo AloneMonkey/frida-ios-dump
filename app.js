@@ -13,7 +13,7 @@ function getbundleid(name){
 	var result;
 	for(var index = 0; index < apps.count(); index++){
 		var proxy = apps.objectAtIndex_(index);
-		if(proxy.localizedName().toString() == name){
+		if(proxy.localizedName() && proxy.localizedName().toString() == name){
 			return proxy.bundleIdentifier().toString();
 		}
 	}
