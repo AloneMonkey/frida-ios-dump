@@ -10,6 +10,7 @@ import frida
 import threading 
 import os
 import shutil
+import time
 
 reload(sys)
 sys.setdefaultencoding('utf8')
@@ -114,6 +115,8 @@ def main(target):
 	opened.wait();
 	session.detach();
 	createDir(os.getcwd()+"/"+OUTPUT)
+	print 'Waiting for the application to open......'
+	time.sleep(5);
 	print "start dump target app......"
 	session = device.attach(name);
 	script = loadJsFile(session, DUMP_JS);
