@@ -24,6 +24,7 @@ opened = threading.Event()
 finished = threading.Event()
 
 global session
+global name
 
 def get_usb_iphone():
 	dManager = frida.get_device_manager();
@@ -52,7 +53,7 @@ def gen_ipa(target):
 			if key != "app":
 				shutil.move(target +"/"+ key, target + "/" + app_name + "/" + value);
 		(shotname,extension) = os.path.splitext(app_name)
-		os.system(u''.join(("zip -qr ", shotname, ".ipa ./Payload")).encode('utf-8').strip());
+		os.system(u''.join(("zip -qr ", name, ".ipa ./Payload")).encode('utf-8').strip());
 		os.system("rm -rf ./Payload");
 	except Exception as e:
 		print e
@@ -103,6 +104,7 @@ def createDir(path):
 
 def main(target):
 	global session
+	global name
 	session = None
 	device = get_usb_iphone();
 	#open app
