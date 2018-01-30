@@ -63,7 +63,7 @@ def gen_ipa(target):
 			if key != "app":
 				shutil.move(target +"/"+ key, target + "/" + app_name + "/" + value);
 		(shotname,extension) = os.path.splitext(app_name)
-		os.system(u''.join(("zip -qr ", name, ".ipa ./Payload")).encode('utf-8').strip());
+		os.system(u''.join(("zip -qr ", name.replace(" ", "\\ "), ".ipa ./Payload")).encode('utf-8').strip());
 		os.system("rm -rf ./Payload");
 	except Exception as e:
 		print e
@@ -79,14 +79,14 @@ def on_message(message,data):
 		if payload.has_key("dump"):
 			orign_path = payload["path"]
 			dumppath = payload["dump"]
-			os.system(u''.join(("scp -P 2222 root@localhost:", dumppath, u" ./" + OUTPUT + u"/")).encode('utf-8').strip())
-			os.system(u''.join(("chmod 655 ", u'./' + OUTPUT + u'/', os.path.basename(dumppath))).encode('utf-8').strip())
+			os.system(u''.join(("scp -P 2222 root@localhost:", dumppath.replace(" ", "\\\\\ "), u" ./" + OUTPUT + u"/")).encode('utf-8').strip())
+			os.system(u''.join(("chmod 655 ", u'./' + OUTPUT + u'/', os.path.basename(dumppath.replace(" ", "\\ ")))).encode('utf-8').strip())
 			index = orign_path.find(".app/")
 			file_dict[os.path.basename(dumppath)] =  orign_path[index+5:]
 		if payload.has_key("app"):
 			apppath = payload["app"]
-			os.system(u''.join(("scp -r -P 2222 root@localhost:", apppath, u" ./" + OUTPUT + u"/")).encode('utf-8').strip())
-			os.system(u''.join(("chmod 755 ", u'./' + OUTPUT + u'/', os.path.basename(apppath))).encode('utf-8').strip())
+			os.system(u''.join(("scp -r -P 2222 root@localhost:", apppath.replace(" ", "\\\\\ "), u" ./" + OUTPUT + u"/")).encode('utf-8').strip())
+			os.system(u''.join(("chmod 755 ", u'./' + OUTPUT + u'/', os.path.basename(apppath.replace(" ", "\\ ")))).encode('utf-8').strip())
 			file_dict["app"] = os.path.basename(apppath)
 		if payload.has_key("done"):
 			gen_ipa(os.getcwd()+"/"+OUTPUT)
