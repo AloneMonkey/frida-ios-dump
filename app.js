@@ -20,12 +20,33 @@ function getbundleid(name){
 	return ""
 };
 
+function getdisplayname(bundleid){
+	const workspace = LSApplicationWorkspace.defaultWorkspace();
+	const apps = workspace.allApplications();
+	var result;
+	for(var index = 0; index < apps.count(); index++){
+		var proxy = apps.objectAtIndex_(index);
+		if(proxy.bundleIdentifier() && proxy.bundleIdentifier().toString() == bundleid){
+			return proxy.localizedName().toString();
+		}
+	}
+	return ""
+}
+
 function handleMessage(message) {
-	const bundleid = getbundleid(message);
+	var bundleid;
+	var displayname;
+	if(message['name']){
+		displayname = message['name']
+		bundleid = getbundleid(displayname);
+	}else if(message['bundleid']){
+		bundleid = message['bundleid']
+		displayname = getdisplayname(bundleid);
+	}
 	if(bundleid.length > 0){
 		openApplication(bundleid);
 	}
-	send({opened: "ok"});
+	send({ opened: displayname });
 }
 
 recv(handleMessage);
