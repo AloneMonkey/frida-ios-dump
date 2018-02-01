@@ -175,9 +175,9 @@ var LC_SEGMENT_64 = 0x19;
 var LC_ENCRYPTION_INFO = 0x21;
 var LC_ENCRYPTION_INFO_64 = 0x2C;
 
-function pad(str, n) { 
-  return Array(n-str.length+1).join("0")+str;  
-}  
+function pad(str, n) {
+    return Array(n-str.length+1).join("0")+str;
+}
 
 function swap32(value) {
     value = pad(value.toString(16),8)
@@ -214,7 +214,7 @@ function dumpModule(name) {
     if(!access(allocStr(newmodpath),0)){
         remove(allocStr(newmodpath));
     }
-    
+
     var fmodule = open(newmodpath, O_CREAT | O_RDWR, 0);
     var foldmodule = open(oldmodpath, O_RDONLY, 0);
 
@@ -288,7 +288,7 @@ function dumpModule(name) {
     var segments = [];
     for (var i = 0; i < ncmds; i++) {
         var cmd = getU32(modbase.add(off));
-        var cmdsize = getU32(modbase.add(off + 4)); 
+        var cmdsize = getU32(modbase.add(off + 4));
         if (cmd == LC_ENCRYPTION_INFO || cmd == LC_ENCRYPTION_INFO_64) {
             offset_cryptid = off + 16;
             crypt_off = getU32(modbase.add(off + 8));
@@ -305,11 +305,11 @@ function dumpModule(name) {
         lseek(fmodule, crypt_off, SEEK_SET);
         write(fmodule, modbase.add(crypt_off), crypt_size);
     }
-    
+
     close(fmodule);
     close(foldmodule);
     return newmodpath
-}   
+}
 
 function handleMessage(message) {
     //start dump
