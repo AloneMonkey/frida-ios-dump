@@ -207,7 +207,7 @@ function dumpModule(name) {
     var modbase = modules[i].base;
     var modsize = modules[i].size;
     var newmodname = modules[i].name;
-    var newmodpath = getDocumentDir() + "/" + newmodname;
+    var newmodpath = getDocumentDir() + "/" + newmodname + ".fid";
     var oldmodpath = modules[i].path;
 
 
