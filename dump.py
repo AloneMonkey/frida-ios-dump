@@ -11,9 +11,15 @@ import threading
 import os
 import shutil
 import time
-import getopt
+import argparse
 import tempfile
 import subprocess
+import re
+
+import paramiko
+from paramiko import SSHClient
+from scp import SCPClient
+import traceback
 
 reload(sys)
 sys.setdefaultencoding('utf8')
@@ -22,8 +28,10 @@ script_dir = os.path.dirname(os.path.realpath(__file__))
 
 DUMP_JS = os.path.join(script_dir, 'dump.js')
 
-SSH_USER_HOST='root@localhost:'
-SSH_PORT=2222
+User = 'root'
+Password = 'alpine'
+Host = 'localhost'
+Port = 2222
 
 TEMP_DIR = tempfile.gettempdir()
 PAYLOAD_DIR = 'Payload'
@@ -33,41 +41,33 @@ file_dict = {}
 finished = threading.Event()
 
 
-# show usage
-def usage():
-    print '-------------------------frida-ios-dump(by AloneMonkey v2.0)----------------------------'
-    print '\t%-20s\t%s' % ('-h,--help', 'Show help menu.')
-    print '\t%-20s\t%s' % ('name', 'Decrypt the application with the specified display name or bundle identifier. ps: ./dump.py 微信')
-    print '\t%-20s\t%s' % ('-l', 'List the installed apps.')
-
-
 def get_usb_iphone():
-    dManager = frida.get_device_manager()
+    device_manager = frida.get_device_manager()
     changed = threading.Event()
 
     def on_changed():
         changed.set()
 
-    dManager.on('changed', on_changed)
+    device_manager.on('changed', on_changed)
 
     device = None
     while device is None:
-        devices = [dev for dev in dManager.enumerate_devices() if dev.type == 'tether']
+        devices = [dev for dev in device_manager.enumerate_devices() if dev.type == 'tether']
         if len(devices) == 0:
             print 'Waiting for USB device...'
             changed.wait()
         else:
             device = devices[0]
 
-    dManager.off('changed', on_changed)
+    device_manager.off('changed', on_changed)
 
     return device
 
 
-def generate_ipa(path, display_name, bundle_identifier):
-    ipa_filename = display_name.replace(' ', '\\ ') + '.ipa'
+def generate_ipa(path, display_name):
+    ipa_filename = display_name + '.ipa'
 
-    print 'Generating {}'.format(ipa_filename)
+    print 'Generating "{}"'.format(ipa_filename)
     try:
         app_name = file_dict['app']
 
@@ -89,42 +89,49 @@ def generate_ipa(path, display_name, bundle_identifier):
 
 def on_message(message, data):
     global name
-    if message.has_key('payload'):
+    if 'payload' in message:
         payload = message['payload']
-        if payload.has_key('opened'):
+        if 'opened' in payload:
             name = payload['opened']
 
-        if payload.has_key('dump'):
+        if 'dump' in payload:
             origin_path = payload['path']
             dump_path = payload['dump']
 
-            scp_from = SSH_USER_HOST + dump_path.replace(' ', '\ ')
+            scp_from = dump_path.replace(' ', '\ ')
             scp_to = PAYLOAD_PATH + u'/'
-            scp_args = ('scp', '-P {}'.format(SSH_PORT), scp_from, scp_to)
-            subprocess.check_call(scp_args)
+
+            with SCPClient(ssh.get_transport()) as scp:
+                scp.get(scp_from, scp_to)
 
             chmod_dir = os.path.join(PAYLOAD_PATH, os.path.basename(dump_path))
             chmod_args = ('chmod', '655', chmod_dir)
-            subprocess.check_call(chmod_args)
+            try:
+                subprocess.check_call(chmod_args)
+            except subprocess.CalledProcessError as err:
+                print err
 
             index = origin_path.find('.app/')
             file_dict[os.path.basename(dump_path)] = origin_path[index + 5:]
 
-        if payload.has_key('app'):
+        if 'app' in payload:
             app_path = payload['app']
 
-            scp_from = SSH_USER_HOST + app_path.replace(' ', '\ ')
+            scp_from = app_path.replace(' ', '\ ')
             scp_to = PAYLOAD_PATH + u'/'
-            scp_args = ('scp', '-r', '-P {}'.format(SSH_PORT), scp_from, scp_to)
-            subprocess.check_call(scp_args)
+            with SCPClient(ssh.get_transport()) as scp:
+                scp.get(scp_from, scp_to, recursive=True)
 
             chmod_dir = os.path.join(PAYLOAD_PATH, os.path.basename(app_path))
             chmod_args = ('chmod', '755', chmod_dir)
-            subprocess.check_call(chmod_args)
+            try:
+                subprocess.check_call(chmod_args)
+            except subprocess.CalledProcessError as err:
+                print err
 
             file_dict['app'] = os.path.basename(app_path)
 
-        if payload.has_key('done'):
+        if 'done' in payload:
             finished.set()
 
 
@@ -145,10 +152,10 @@ def compare_applications(a, b):
 
 
 def cmp_to_key(mycmp):
-    'Convert a cmp= function into a key= function'
+    """Convert a cmp= function into a key= function"""
 
     class K:
-        def __init__(self, obj, *args):
+        def __init__(self, obj):
             self.obj = obj
 
         def __lt__(self, other):
@@ -200,11 +207,11 @@ def list_applications(device):
     print '%s  %s  %s' % (pid_column_width * '-', name_column_width * '-', identifier_column_width * '-')
     line_format = '%' + str(pid_column_width) + 's  ' + '%-' + str(name_column_width) + 's  ' + '%-' + str(
         identifier_column_width) + 's'
-    for app in sorted(applications, key=cmp_to_key(compare_applications)):
-        if app.pid == 0:
-            print line_format % ('-', app.name, app.identifier)
+    for application in sorted(applications, key=cmp_to_key(compare_applications)):
+        if application.pid == 0:
+            print line_format % ('-', application.name, application.identifier)
         else:
-            print line_format % (app.pid, app.name, app.identifier)
+            print line_format % (application.pid, application.name, application.identifier)
 
 
 def load_js_file(session, filename):
@@ -224,12 +231,16 @@ def create_dir(path):
     if os.path.exists(path):
         print 'Removing {}'.format(path)
         shutil.rmtree(path)
-    os.makedirs(path)
+    try:
+        os.makedirs(path)
+    except os.error as err:
+        print err
 
 
 def open_target_app(device, name_or_bundleid):
     print 'Start the target app {}'.format(name_or_bundleid)
 
+    pid = -1
     display_name = ''
     bundle_identifier = ''
     for application in get_applications(device):
@@ -240,15 +251,14 @@ def open_target_app(device, name_or_bundleid):
     try:
         pid = device.spawn([bundle_identifier])
         device.resume(pid)
-        create_dir(PAYLOAD_PATH)
         time.sleep(1)
     except Exception as e:
         print e
 
-    return (pid, display_name, bundle_identifier)
+    return pid, display_name, bundle_identifier
 
 
-def start_dump(device, pid, display_name, bundle_identifier):
+def start_dump(device, pid, ipa_name):
     print 'Dumping {} to {}'.format(display_name, TEMP_DIR)
 
     session = device.attach(pid)
@@ -256,51 +266,54 @@ def start_dump(device, pid, display_name, bundle_identifier):
     script.post('dump')
     finished.wait()
 
-    generate_ipa(PAYLOAD_PATH, display_name, bundle_identifier)
+    generate_ipa(PAYLOAD_PATH, ipa_name)
 
     if session:
         session.detach()
 
-def check_args():
-    if len(sys.argv) < 2:
-        usage()
-        return 1
-
-    try:
-        opts, args = getopt.getopt(sys.argv[1:], 'hl', ['help'])
-    except getopt.GetoptError:
-        usage()
-        return 2
-
-    for opt, value in opts:
-        if opt in ('-h', '--help'):
-            usage()
-
-        if opt in '-l':
-            device = get_usb_iphone()
-            list_applications(device)
-
-    if len(opts) == 0:
-        name_or_bundleid = ' '.join(sys.argv[1:])
-
-        device = get_usb_iphone()
-        print "Device {}".format(device)
-        (pid, display_name, bundle_identifier) = open_target_app(device, name_or_bundleid)
-        start_dump(device, pid, display_name, bundle_identifier)
-
-    return 0
-
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='frida-ios-dump (by AloneMonkey v2.0)')
+    parser.add_argument('-l', '--list', dest='list_applications', action='store_true', help='List the installed apps')
+    parser.add_argument('-o', '--output', dest='output_ipa', help='Specify name of the decrypted IPA')
+    parser.add_argument('target', nargs='?', help='Bundle identifier or display name of the target app')
+    args = parser.parse_args()
+
     exit_code = 0
-    try:
-        exit_code = check_args()
-    except:
-        exit_code = 1
+    ssh = None
+    device = get_usb_iphone()
+    if args.list_applications:
+        list_applications(device)
+    else:
+        print "Device {}".format(device)
+        name_or_bundleid = args.target
+        output_ipa = args.output_ipa
+
+        try:
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.connect(Host, port=Port, username=User, password=Password)
+
+            create_dir(PAYLOAD_PATH)
+            (pid, display_name, bundle_identifier) = open_target_app(device, name_or_bundleid)
+            if output_ipa is None:
+                output_ipa = display_name
+            output_ipa = re.sub('\.ipa$', '', output_ipa)
+            start_dump(device, pid, output_ipa)
+
+        except paramiko.AuthenticationException as e:
+            print e
+            exit_code = 1
+        except Exception as e:
+            print('*** Caught exception: %s: %s' % (e.__class__, e))
+            traceback.print_exc()
+            exit_code = 1
+
+    if ssh:
+        ssh.close()
 
     if os.path.exists(PAYLOAD_PATH):
         print 'Deleting ' + PAYLOAD_PATH
         shutil.rmtree(PAYLOAD_PATH)
 
     sys.exit(exit_code)
-

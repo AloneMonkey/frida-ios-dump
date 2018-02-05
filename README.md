@@ -7,6 +7,8 @@ Pull a decrypted IPA from a jailbroken device
  2. Run usbmuxd/iproxy SSH forwarding over USB (Default 2222 -> 22)
  3. Run ./dump.py `Display name` or `Bundle identifier`
 
+For SSH/SCP make sure you have your public key added to the target device's ~/.ssh/authorized_keys file.
+
 ```
 ./dump.py Aftenposten
 Start the target app Aftenposten
