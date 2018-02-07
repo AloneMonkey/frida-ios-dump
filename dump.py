@@ -300,7 +300,9 @@ if __name__ == '__main__':
                 output_ipa = display_name
             output_ipa = re.sub('\.ipa$', '', output_ipa)
             start_dump(device, pid, output_ipa)
-
+        except paramiko.ssh_exception.NoValidConnectionsError as e:
+            print e
+            exit_code = 1
         except paramiko.AuthenticationException as e:
             print e
             exit_code = 1
