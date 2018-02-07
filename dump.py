@@ -198,7 +198,7 @@ def create_dir(path):
 def open_target_app(isbundleid, value):
 	global session;
 	device = get_usb_iphone();
-	name = u'SpringBoard';
+	name = u'邮件';
 	print "open target app......"
 	session = device.attach(name);
 	script = load_js_file(session, APP_JS);
