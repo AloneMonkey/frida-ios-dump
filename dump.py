@@ -295,8 +295,7 @@ if __name__ == '__main__':
             if output_ipa is None:
                 output_ipa = display_name
             output_ipa = re.sub('\.ipa$', '', output_ipa)
-            if pid > 0:
-                start_dump(device, pid, output_ipa)
+            start_dump(session, output_ipa)
         except paramiko.ssh_exception.NoValidConnectionsError as e:
             print e
             exit_code = 1
