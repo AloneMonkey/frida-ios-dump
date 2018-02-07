@@ -19,6 +19,7 @@ import re
 import paramiko
 from paramiko import SSHClient
 from scp import SCPClient
+from tqdm import tqdm
 import traceback
 
 reload(sys)
@@ -86,14 +87,18 @@ def generate_ipa(path, display_name):
         print e
         finished.set()
 
-
 def on_message(message, data):
-    global name
+    t = tqdm(unit='B',unit_scale=True,unit_divisor=1024,miniters=1)
+    last_sent = [0]
+
+    def progress(filename, size, sent):
+        t.desc = os.path.basename(filename)
+        t.total = size
+        t.update(sent - last_sent[0])
+        last_sent[0] = 0 if size == sent else sent
+
     if 'payload' in message:
         payload = message['payload']
-        if 'opened' in payload:
-            name = payload['opened']
-
         if 'dump' in payload:
             origin_path = payload['path']
             dump_path = payload['dump']
@@ -101,9 +106,9 @@ def on_message(message, data):
             scp_from = dump_path
             scp_to = PAYLOAD_PATH + u'/'
 
-            with SCPClient(ssh.get_transport()) as scp:
+            with SCPClient(ssh.get_transport(), progress = progress) as scp:
                 scp.get(scp_from, scp_to)
-
+            t.close()
             chmod_dir = os.path.join(PAYLOAD_PATH, os.path.basename(dump_path))
             chmod_args = ('chmod', '655', chmod_dir)
             try:
@@ -119,9 +124,9 @@ def on_message(message, data):
 
             scp_from = app_path
             scp_to = PAYLOAD_PATH + u'/'
-            with SCPClient(ssh.get_transport()) as scp:
+            with SCPClient(ssh.get_transport(), progress = progress) as scp:
                 scp.get(scp_from, scp_to, recursive=True)
-
+            t.close()
             chmod_dir = os.path.join(PAYLOAD_PATH, os.path.basename(app_path))
             chmod_args = ('chmod', '755', chmod_dir)
             try:
@@ -239,17 +244,23 @@ def create_dir(path):
 def open_target_app(device, name_or_bundleid):
     print 'Start the target app {}'.format(name_or_bundleid)
 
+    pid = ''
+    session = None
     display_name = ''
     bundle_identifier = ''
     for application in get_applications(device):
         if name_or_bundleid == application.identifier or name_or_bundleid == application.name:
+            pid = application.pid
             display_name = application.name
             bundle_identifier = application.identifier
 
     try:
-        pid = device.spawn([bundle_identifier])
-        session = device.attach(pid)
-        device.resume(pid)
+        if not pid:
+            pid = device.spawn([bundle_identifier])
+            session = device.attach(pid)
+            device.resume(pid)
+        else:
+            session = device.attach(pid)
     except Exception as e:
         print e
 
@@ -295,7 +306,8 @@ if __name__ == '__main__':
             if output_ipa is None:
                 output_ipa = display_name
             output_ipa = re.sub('\.ipa$', '', output_ipa)
-            start_dump(session, output_ipa)
+            if session:
+                start_dump(session, output_ipa)
         except paramiko.ssh_exception.NoValidConnectionsError as e:
             print e
             exit_code = 1
