@@ -1,3 +1,5 @@
+Module.ensureInitialized('Foundation');
+
 var O_RDONLY = 0;
 var O_WRONLY = 1;
 var O_RDWR = 2;
@@ -193,6 +195,7 @@ function dumpModule(name) {
     if (modules == null) {
         modules = getAllAppModules();
     }
+
     var targetmod = null;
     for (var i = 0; i < modules.length; i++) {
         if (modules[i].path.indexOf(name) != -1) {

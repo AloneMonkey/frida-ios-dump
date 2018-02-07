@@ -239,7 +239,6 @@ def create_dir(path):
 def open_target_app(device, name_or_bundleid):
     print 'Start the target app {}'.format(name_or_bundleid)
 
-    pid = -1
     display_name = ''
     bundle_identifier = ''
     for application in get_applications(device):
@@ -249,18 +248,17 @@ def open_target_app(device, name_or_bundleid):
 
     try:
         pid = device.spawn([bundle_identifier])
+        session = device.attach(pid)
         device.resume(pid)
-        time.sleep(3)
     except Exception as e:
         print e
 
-    return pid, display_name, bundle_identifier
+    return session, display_name, bundle_identifier
 
 
-def start_dump(device, pid, ipa_name):
+def start_dump(session, ipa_name):
     print 'Dumping {} to {}'.format(display_name, TEMP_DIR)
 
-    session = device.attach(pid)
     script = load_js_file(session, DUMP_JS)
     script.post('dump')
     finished.wait()
@@ -293,13 +291,15 @@ if __name__ == '__main__':
             ssh.connect(Host, port=Port, username=User, password=Password)
 
             create_dir(PAYLOAD_PATH)
-            (pid, display_name, bundle_identifier) = open_target_app(device, name_or_bundleid)
+            (session, display_name, bundle_identifier) = open_target_app(device, name_or_bundleid)
             if output_ipa is None:
                 output_ipa = display_name
             output_ipa = re.sub('\.ipa$', '', output_ipa)
             if pid > 0:
                 start_dump(device, pid, output_ipa)
-
+        except paramiko.ssh_exception.NoValidConnectionsError as e:
+            print e
+            exit_code = 1
         except paramiko.AuthenticationException as e:
             print e
             exit_code = 1
