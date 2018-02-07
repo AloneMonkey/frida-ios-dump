@@ -98,7 +98,7 @@ def on_message(message, data):
             origin_path = payload['path']
             dump_path = payload['dump']
 
-            scp_from = dump_path.replace(' ', '\ ')
+            scp_from = dump_path
             scp_to = PAYLOAD_PATH + u'/'
 
             with SCPClient(ssh.get_transport()) as scp:
@@ -117,7 +117,7 @@ def on_message(message, data):
         if 'app' in payload:
             app_path = payload['app']
 
-            scp_from = app_path.replace(' ', '\ ')
+            scp_from = app_path
             scp_to = PAYLOAD_PATH + u'/'
             with SCPClient(ssh.get_transport()) as scp:
                 scp.get(scp_from, scp_to, recursive=True)
@@ -229,7 +229,6 @@ def create_dir(path):
     path = path.strip()
     path = path.rstrip('\\')
     if os.path.exists(path):
-        print 'Removing {}'.format(path)
         shutil.rmtree(path)
     try:
         os.makedirs(path)
@@ -283,7 +282,6 @@ if __name__ == '__main__':
     if args.list_applications:
         list_applications(device)
     else:
-        print "Device {}".format(device)
         name_or_bundleid = args.target
         output_ipa = args.output_ipa
 
@@ -297,7 +295,8 @@ if __name__ == '__main__':
             if output_ipa is None:
                 output_ipa = display_name
             output_ipa = re.sub('\.ipa$', '', output_ipa)
-            start_dump(session, output_ipa)
+            if pid > 0:
+                start_dump(device, pid, output_ipa)
         except paramiko.ssh_exception.NoValidConnectionsError as e:
             print e
             exit_code = 1
@@ -313,7 +312,6 @@ if __name__ == '__main__':
         ssh.close()
 
     if os.path.exists(PAYLOAD_PATH):
-        print 'Deleting ' + PAYLOAD_PATH
         shutil.rmtree(PAYLOAD_PATH)
 
     sys.exit(exit_code)

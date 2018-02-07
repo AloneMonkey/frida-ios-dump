@@ -1,3 +1,5 @@
+Module.ensureInitialized('Foundation');
+
 var O_RDONLY = 0;
 var O_WRONLY = 1;
 var O_RDWR = 2;
@@ -208,7 +210,6 @@ function dumpModule(name) {
     var modbase = modules[i].base;
     var modsize = modules[i].size;
     var newmodname = modules[i].name;
-    Module.ensureInitialized(newmodname);
     var newmodpath = getDocumentDir() + "/" + newmodname + ".fid";
     var oldmodpath = modules[i].path;
 
