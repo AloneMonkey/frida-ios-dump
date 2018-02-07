@@ -196,6 +196,7 @@ def create_dir(path):
 		print path + u" is existed!"; 
 
 def open_target_app(isbundleid, value):
+	global session;
 	device = get_usb_iphone();
 	name = u'SpringBoard';
 	print "open target app......"
@@ -212,6 +213,7 @@ def open_target_app(isbundleid, value):
 	time.sleep(5);
 
 def start_dump(target):
+	global session;
 	print "start dump target app......"
 	device = get_usb_iphone();
 	session = device.attach(target);
