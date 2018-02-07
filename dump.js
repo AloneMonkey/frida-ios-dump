@@ -193,6 +193,7 @@ function dumpModule(name) {
     if (modules == null) {
         modules = getAllAppModules();
     }
+
     var targetmod = null;
     for (var i = 0; i < modules.length; i++) {
         if (modules[i].path.indexOf(name) != -1) {
@@ -207,7 +208,8 @@ function dumpModule(name) {
     var modbase = modules[i].base;
     var modsize = modules[i].size;
     var newmodname = modules[i].name;
-    var newmodpath = getDocumentDir() + "/" + newmodname;
+    Module.ensureInitialized(newmodname);
+    var newmodpath = getDocumentDir() + "/" + newmodname + ".fid";
     var oldmodpath = modules[i].path;
 
 
