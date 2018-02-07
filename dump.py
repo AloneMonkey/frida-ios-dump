@@ -240,7 +240,6 @@ def create_dir(path):
 def open_target_app(device, name_or_bundleid):
     print 'Start the target app {}'.format(name_or_bundleid)
 
-    pid = -1
     display_name = ''
     bundle_identifier = ''
     for application in get_applications(device):
