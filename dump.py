@@ -250,7 +250,7 @@ def open_target_app(device, name_or_bundleid):
     try:
         pid = device.spawn([bundle_identifier])
         device.resume(pid)
-        time.sleep(1)
+        time.sleep(3)
     except Exception as e:
         print e
 
