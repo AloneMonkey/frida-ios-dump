@@ -106,9 +106,9 @@ def on_message(message, data):
             scp_from = dump_path
             scp_to = PAYLOAD_PATH + u'/'
 
-            with SCPClient(ssh.get_transport(), progress = progress) as scp:
+            with SCPClient(ssh.get_transport(), progress = progress, socket_timeout = 60) as scp:
                 scp.get(scp_from, scp_to)
-            t.close()
+
             chmod_dir = os.path.join(PAYLOAD_PATH, os.path.basename(dump_path))
             chmod_args = ('chmod', '655', chmod_dir)
             try:
@@ -124,9 +124,9 @@ def on_message(message, data):
 
             scp_from = app_path
             scp_to = PAYLOAD_PATH + u'/'
-            with SCPClient(ssh.get_transport(), progress = progress) as scp:
+            with SCPClient(ssh.get_transport(), progress = progress, socket_timeout = 60) as scp:
                 scp.get(scp_from, scp_to, recursive=True)
-            t.close()
+
             chmod_dir = os.path.join(PAYLOAD_PATH, os.path.basename(app_path))
             chmod_args = ('chmod', '755', chmod_dir)
             try:
@@ -138,7 +138,7 @@ def on_message(message, data):
 
         if 'done' in payload:
             finished.set()
-
+    t.close()
 
 def compare_applications(a, b):
     a_is_running = a.pid != 0
@@ -290,7 +290,10 @@ if __name__ == '__main__':
     exit_code = 0
     ssh = None
     device = get_usb_iphone()
-    if args.list_applications:
+
+    if len(sys.argv[1:]) == 0:
+        parser.print_help()
+    elif args.list_applications:
         list_applications(device)
     else:
         name_or_bundleid = args.target
