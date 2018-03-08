@@ -38,3 +38,7 @@ Done.
 Congratulations!!! You've got a decrypted IPA file.
 
 Drag to [MonkeyDev](https://github.com/AloneMonkey/MonkeyDev), Happy hacking!
+
+### issues
+
+If causes device to reboot or lost connection on 32bit device or ios 8-9 device, please open the application before dumping.
