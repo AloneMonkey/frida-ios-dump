@@ -41,4 +41,12 @@ Drag to [MonkeyDev](https://github.com/AloneMonkey/MonkeyDev), Happy hacking!
 
 ### issues
 
-If causes device to reboot or lost connection on 32bit device or Other system version, please open the application before dumping.
+If the following error occurs:
+
+* causes device to reboot
+* lost connection
+* unexpected error while probing dyld of target process
+
+please open the application before dumping.
+
+
