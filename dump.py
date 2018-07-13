@@ -50,7 +50,7 @@ def get_usb_iphone():
 
     device = None
     while device is None:
-        devices = [dev for dev in device_manager.enumerate_devices() if dev.type == 'tether']
+        devices = [dev for dev in device_manager.enumerate_devices() if dev.type == 'usb']
         if len(devices) == 0:
             print('Waiting for USB device...')
             changed.wait()
