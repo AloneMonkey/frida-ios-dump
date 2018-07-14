@@ -41,7 +41,7 @@ finished = threading.Event()
 
 def get_usb_iphone():
     Type = 'usb'
-    if frida.__version__ < 12:
+    if int(frida.__version__.split('.')[0]) < 12:
         Type = 'tether'
     device_manager = frida.get_device_manager()
     changed = threading.Event()
