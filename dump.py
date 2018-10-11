@@ -187,8 +187,7 @@ def get_applications(device):
     try:
         applications = device.enumerate_applications()
     except Exception as e:
-        print('Failed to enumerate applications: %s' % e)
-        return
+        sys.exit('Failed to enumerate applications: %s' % e)
 
     return applications
 
