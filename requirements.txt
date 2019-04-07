@@ -2,7 +2,7 @@ asn1crypto
 bcrypt
 cffi
 colorama
-cryptography
+cryptography==2.4.2
 enum34
 frida-tools
 idna
