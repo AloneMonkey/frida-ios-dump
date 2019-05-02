@@ -137,6 +137,7 @@ lseek = getExportFunction("f", "lseek", "int64", ["int", "int64", "int"]);
 close = getExportFunction("f", "close", "int", ["int"]);
 remove = getExportFunction("f", "remove", "int", ["pointer"]);
 access = getExportFunction("f", "access", "int", ["pointer", "int"]);
+dlopen = getExportFunction("f", "dlopen", "pointer", ["pointer", "int"]);
 
 function getDocumentDir() {
     var NSDocumentDirectory = 9;
@@ -154,13 +155,11 @@ function open(pathname, flags, mode) {
 
 var modules = null;
 function getAllAppModules() {
-    if (modules == null) {
-        modules = new Array();
-        var tmpmods = Process.enumerateModulesSync();
-        for (var i = 0; i < tmpmods.length; i++) {
-            if (tmpmods[i].path.indexOf(".app") != -1) {
-                modules.push(tmpmods[i]);
-            }
+    modules = new Array();
+    var tmpmods = Process.enumerateModulesSync();
+    for (var i = 0; i < tmpmods.length; i++) {
+        if (tmpmods[i].path.indexOf(".app") != -1) {
+            modules.push(tmpmods[i]);
         }
     }
     return modules;
@@ -314,15 +313,75 @@ function dumpModule(name) {
     return newmodpath
 }
 
+function loadAllDynamicLibrary(app_path) {
+    var defaultManager = ObjC.classes.NSFileManager.defaultManager();
+    var errorPtr = Memory.alloc(Process.pointerSize); 
+    Memory.writePointer(errorPtr, NULL); 
+    var filenames = defaultManager.contentsOfDirectoryAtPath_error_(app_path, errorPtr);
+    for (var i = 0, l = filenames.count(); i < l; i++) {
+        var file_name = filenames.objectAtIndex_(i);
+        var file_path = app_path.stringByAppendingPathComponent_(file_name);
+        if (file_name.hasSuffix_(".framework")) {
+            var bundle = ObjC.classes.NSBundle.bundleWithPath_(file_path);
+            if (bundle.isLoaded()) {
+                console.log("[frida-ios-dump]: " + file_name + " has been loaded. ");
+            } else {
+                if (bundle.load()) {
+                    console.log("[frida-ios-dump]: Load " + file_name + " success. ");
+                } else {
+                    console.log("[frida-ios-dump]: Load " + file_name + " failed. ");
+                }
+            }
+        } else if (file_name.hasSuffix_(".bundle") || 
+                   file_name.hasSuffix_(".momd") ||
+                   file_name.hasSuffix_(".strings") ||
+                   file_name.hasSuffix_(".appex") ||
+                   file_name.hasSuffix_(".app") ||
+                   file_name.hasSuffix_(".lproj") ||
+                   file_name.hasSuffix_(".storyboardc")) {
+            continue;
+        } else {
+            var isDirPtr = Memory.alloc(Process.pointerSize);
+            Memory.writePointer(isDirPtr,NULL);
+            defaultManager.fileExistsAtPath_isDirectory_(file_path, isDirPtr);
+            if (Memory.readPointer(isDirPtr) == 1) {
+                loadAllDynamicLibrary(file_path);
+            } else {
+                if (file_name.hasSuffix_(".dylib")) {
+                    var is_loaded = 0;
+                    for (var j = 0; j < modules.length; j++) {
+                        if (modules[j].path.indexOf(file_name) != -1) {
+                            is_loaded = 1;
+                            console.log("[frida-ios-dump]: " + file_name + " has been dlopen.");
+                            break;
+                        }
+                    } 
+
+                    if (!is_loaded) {
+                        if (dlopen(file_path.UTF8String(), 9)) {
+                            console.log("[frida-ios-dump]: dlopen " + file_name + " success. ");
+                        } else {
+                            console.log("[frida-ios-dump]: dlopen " + file_name + " failed. ");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 function handleMessage(message) {
-    //start dump
+    modules = getAllAppModules();
+    var app_path = ObjC.classes.NSBundle.mainBundle().bundlePath();
+    loadAllDynamicLibrary(app_path);
+    // start dump
     modules = getAllAppModules();
     for (var i = 0; i  < modules.length; i++) {
         console.log("start dump " + modules[i].path);
         result = dumpModule(modules[i].path);
         send({ dump: result, path: modules[i].path});
     }
-    send({app: ObjC.classes.NSBundle.mainBundle().bundlePath().toString()});
+    send({app: app_path.toString()});
     send({done: "ok"});
     recv(handleMessage);
 }
