@@ -129,15 +129,15 @@ function getExportFunction(type, name, ret, args) {
     }
 }
 
-NSSearchPathForDirectoriesInDomains = getExportFunction("f", "NSSearchPathForDirectoriesInDomains", "pointer", ["int", "int", "int"]);
-wrapper_open = getExportFunction("f", "open", "int", ["pointer", "int", "int"]);
-read = getExportFunction("f", "read", "int", ["int", "pointer", "int"]);
-write = getExportFunction("f", "write", "int", ["int", "pointer", "int"]);
-lseek = getExportFunction("f", "lseek", "int64", ["int", "int64", "int"]);
-close = getExportFunction("f", "close", "int", ["int"]);
-remove = getExportFunction("f", "remove", "int", ["pointer"]);
-access = getExportFunction("f", "access", "int", ["pointer", "int"]);
-dlopen = getExportFunction("f", "dlopen", "pointer", ["pointer", "int"]);
+var NSSearchPathForDirectoriesInDomains = getExportFunction("f", "NSSearchPathForDirectoriesInDomains", "pointer", ["int", "int", "int"]);
+var wrapper_open = getExportFunction("f", "open", "int", ["pointer", "int", "int"]);
+var read = getExportFunction("f", "read", "int", ["int", "pointer", "int"]);
+var write = getExportFunction("f", "write", "int", ["int", "pointer", "int"]);
+var lseek = getExportFunction("f", "lseek", "int64", ["int", "int64", "int"]);
+var close = getExportFunction("f", "close", "int", ["int"]);
+var remove = getExportFunction("f", "remove", "int", ["pointer"]);
+var access = getExportFunction("f", "access", "int", ["pointer", "int"]);
+var dlopen = getExportFunction("f", "dlopen", "pointer", ["pointer", "int"]);
 
 function getDocumentDir() {
     var NSDocumentDirectory = 9;
@@ -378,7 +378,7 @@ function handleMessage(message) {
     modules = getAllAppModules();
     for (var i = 0; i  < modules.length; i++) {
         console.log("start dump " + modules[i].path);
-        result = dumpModule(modules[i].path);
+        var result = dumpModule(modules[i].path);
         send({ dump: result, path: modules[i].path});
     }
     send({app: app_path.toString()});
