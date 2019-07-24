@@ -358,7 +358,7 @@ function loadAllDynamicLibrary(app_path) {
                     } 
 
                     if (!is_loaded) {
-                        if (dlopen(file_path.UTF8String(), 9)) {
+                        if (dlopen(allocStr(file_path.UTF8String()), 9)) {
                             console.log("[frida-ios-dump]: dlopen " + file_name + " success. ");
                         } else {
                             console.log("[frida-ios-dump]: dlopen " + file_name + " failed. ");
