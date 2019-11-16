@@ -4,6 +4,8 @@
 # Author : AloneMonkey
 # blog: www.alonemonkey.com
 
+from __future__ import print_function
+from __future__ import unicode_literals
 import sys
 import codecs
 import frida
@@ -15,15 +17,15 @@ import argparse
 import tempfile
 import subprocess
 import re
-
 import paramiko
 from paramiko import SSHClient
 from scp import SCPClient
 from tqdm import tqdm
 import traceback
 
-reload(sys)
-sys.setdefaultencoding('utf8')
+if sys.version_info[0] < 3:
+    reload(sys)
+    sys.setdefaultencoding('utf8')
 
 script_dir = os.path.dirname(os.path.realpath(__file__))
 
@@ -46,7 +48,6 @@ def get_usb_iphone():
     Type = 'usb'
     if int(frida.__version__.split('.')[0]) < 12:
         Type = 'tether'
-        
     device_manager = frida.get_device_manager()
     changed = threading.Event()
 
@@ -59,7 +60,7 @@ def get_usb_iphone():
     while device is None:
         devices = [dev for dev in device_manager.enumerate_devices() if dev.type == Type]
         if len(devices) == 0:
-            print 'Waiting for USB device...'
+            print('Waiting for USB device...')
             changed.wait()
         else:
             device = devices[0]
@@ -72,7 +73,7 @@ def get_usb_iphone():
 def generate_ipa(path, display_name):
     ipa_filename = display_name + '.ipa'
 
-    print 'Generating "{}"'.format(ipa_filename)
+    print('Generating "{}"'.format(ipa_filename))
     try:
         app_name = file_dict['app']
 
@@ -86,9 +87,8 @@ def generate_ipa(path, display_name):
         zip_args = ('zip', '-qr', os.path.join(os.getcwd(), ipa_filename), target_dir)
         subprocess.check_call(zip_args, cwd=TEMP_DIR)
         shutil.rmtree(PAYLOAD_PATH)
-        print
     except Exception as e:
-        print e
+        print(e)
         finished.set()
 
 def on_message(message, data):
@@ -96,7 +96,7 @@ def on_message(message, data):
     last_sent = [0]
 
     def progress(filename, size, sent):
-        t.desc = os.path.basename(filename)
+        t.desc = os.path.basename(filename).decode("utf-8")
         t.total = size
         t.update(sent - last_sent[0])
         last_sent[0] = 0 if size == sent else sent
@@ -108,7 +108,7 @@ def on_message(message, data):
             dump_path = payload['dump']
 
             scp_from = dump_path
-            scp_to = PAYLOAD_PATH + u'/'
+            scp_to = PAYLOAD_PATH + '/'
 
             with SCPClient(ssh.get_transport(), progress = progress, socket_timeout = 60) as scp:
                 scp.get(scp_from, scp_to)
@@ -118,7 +118,7 @@ def on_message(message, data):
             try:
                 subprocess.check_call(chmod_args)
             except subprocess.CalledProcessError as err:
-                print err
+                print(err)
 
             index = origin_path.find('.app/')
             file_dict[os.path.basename(dump_path)] = origin_path[index + 5:]
@@ -127,7 +127,7 @@ def on_message(message, data):
             app_path = payload['app']
 
             scp_from = app_path
-            scp_to = PAYLOAD_PATH + u'/'
+            scp_to = PAYLOAD_PATH + '/'
             with SCPClient(ssh.get_transport(), progress = progress, socket_timeout = 60) as scp:
                 scp.get(scp_from, scp_to, recursive=True)
 
@@ -136,7 +136,7 @@ def on_message(message, data):
             try:
                 subprocess.check_call(chmod_args)
             except subprocess.CalledProcessError as err:
-                print err
+                print(err)
 
             file_dict['app'] = os.path.basename(app_path)
 
@@ -192,8 +192,7 @@ def get_applications(device):
     try:
         applications = device.enumerate_applications()
     except Exception as e:
-        print 'Failed to enumerate applications: %s' % e
-        return
+        sys.exit('Failed to enumerate applications: %s' % e)
 
     return applications
 
@@ -212,15 +211,15 @@ def list_applications(device):
 
     header_format = '%' + str(pid_column_width) + 's  ' + '%-' + str(name_column_width) + 's  ' + '%-' + str(
         identifier_column_width) + 's'
-    print header_format % ('PID', 'Name', 'Identifier')
-    print '%s  %s  %s' % (pid_column_width * '-', name_column_width * '-', identifier_column_width * '-')
+    print(header_format % ('PID', 'Name', 'Identifier'))
+    print('%s  %s  %s' % (pid_column_width * '-', name_column_width * '-', identifier_column_width * '-'))
     line_format = '%' + str(pid_column_width) + 's  ' + '%-' + str(name_column_width) + 's  ' + '%-' + str(
         identifier_column_width) + 's'
     for application in sorted(applications, key=cmp_to_key(compare_applications)):
         if application.pid == 0:
-            print line_format % ('-', application.name, application.identifier)
+            print(line_format % ('-', application.name, application.identifier))
         else:
-            print line_format % (application.pid, application.name, application.identifier)
+            print(line_format % (application.pid, application.name, application.identifier))
 
 
 def load_js_file(session, filename):
@@ -242,11 +241,11 @@ def create_dir(path):
     try:
         os.makedirs(path)
     except os.error as err:
-        print err
+        print(err)
 
 
 def open_target_app(device, name_or_bundleid):
-    print 'Start the target app {}'.format(name_or_bundleid)
+    print('Start the target app {}'.format(name_or_bundleid))
 
     pid = ''
     session = None
@@ -266,13 +265,13 @@ def open_target_app(device, name_or_bundleid):
         else:
             session = device.attach(pid)
     except Exception as e:
-        print e
+        print(e) 
 
     return session, display_name, bundle_identifier
 
 
 def start_dump(session, ipa_name):
-    print 'Dumping {} to {}'.format(display_name, TEMP_DIR)
+    print('Dumping {} to {}'.format(display_name, TEMP_DIR))
 
     script = load_js_file(session, DUMP_JS)
     script.post('dump')
@@ -293,11 +292,14 @@ if __name__ == '__main__':
 
     exit_code = 0
     ssh = None
+
+    if not len(sys.argv[1:]):
+        parser.print_help()
+        sys.exit(exit_code)
+
     device = get_usb_iphone()
 
-    if len(sys.argv[1:]) == 0:
-        parser.print_help()
-    elif args.list_applications:
+    if args.list_applications:
         list_applications(device)
     else:
         name_or_bundleid = args.target
@@ -316,10 +318,10 @@ if __name__ == '__main__':
             if session:
                 start_dump(session, output_ipa)
         except paramiko.ssh_exception.NoValidConnectionsError as e:
-            print e
+            print(e) 
             exit_code = 1
         except paramiko.AuthenticationException as e:
-            print e
+            print(e) 
             exit_code = 1
         except Exception as e:
             print('*** Caught exception: %s: %s' % (e.__class__, e))
