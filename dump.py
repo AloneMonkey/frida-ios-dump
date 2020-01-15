@@ -23,7 +23,8 @@ from scp import SCPClient
 from tqdm import tqdm
 import traceback
 
-if sys.version_info[0] < 3:
+IS_PY2 = sys.version_info[0] < 3
+if IS_PY2:
     reload(sys)
     sys.setdefaultencoding('utf8')
 
@@ -96,7 +97,11 @@ def on_message(message, data):
     last_sent = [0]
 
     def progress(filename, size, sent):
-        t.desc = os.path.basename(filename).decode("utf-8")
+        baseName = os.path.basename(filename)
+        if IS_PY2:
+            t.desc = baseName.decode("utf-8")
+        else:
+            t.desc = baseName
         t.total = size
         t.update(sent - last_sent[0])
         last_sent[0] = 0 if size == sent else sent
