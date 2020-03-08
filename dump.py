@@ -98,7 +98,7 @@ def on_message(message, data):
 
     def progress(filename, size, sent):
         baseName = os.path.basename(filename)
-        if IS_PY2:
+        if IS_PY2 or isinstance(baseName, bytes):
             t.desc = baseName.decode("utf-8")
         else:
             t.desc = baseName
