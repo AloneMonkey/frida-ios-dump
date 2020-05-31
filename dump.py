@@ -296,6 +296,7 @@ if __name__ == '__main__':
     parser.add_argument('-p', '--port', dest='ssh_port', help='Specify SSH port')
     parser.add_argument('-u', '--user', dest='ssh_user', help='Specify SSH username')
     parser.add_argument('-P', '--password', dest='ssh_password', help='Specify SSH password')
+    parser.add_argument('-K', '--key_filename', dest='ssh_key_filename', help='Specify SSH private key file path')
     parser.add_argument('target', nargs='?', help='Bundle identifier or display name of the target app')
 
     args = parser.parse_args()
@@ -323,11 +324,13 @@ if __name__ == '__main__':
             User = args.ssh_user
         if args.ssh_password:
             Password = args.ssh_password
+        if args.ssh_key_filename:
+            KeyFileName = args.ssh_key_filename
 
         try:
             ssh = paramiko.SSHClient()
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            ssh.connect(Host, port=Port, username=User, password=Password)
+            ssh.connect(Host, port=Port, username=User, password=Password, key_filename=KeyFileName)
 
             create_dir(PAYLOAD_PATH)
             (session, display_name, bundle_identifier) = open_target_app(device, name_or_bundleid)
