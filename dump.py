@@ -36,6 +36,7 @@ User = 'root'
 Password = 'alpine'
 Host = 'localhost'
 Port = 2222
+KeyFileName = None
 
 TEMP_DIR = tempfile.gettempdir()
 PAYLOAD_DIR = 'Payload'
