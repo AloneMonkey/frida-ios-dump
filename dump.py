@@ -32,6 +32,7 @@ script_dir = os.path.dirname(os.path.realpath(__file__))
 
 DUMP_JS = os.path.join(script_dir, 'dump.js')
 
+ID = None
 User = 'root'
 Password = 'alpine'
 Host = 'localhost'
@@ -65,7 +66,10 @@ def get_usb_iphone():
             print('Waiting for USB device...')
             changed.wait()
         else:
-            device = devices[0]
+            for d in devices:
+                if ID is None or d.id == ID:
+                    device = d
+                    break
 
     device_manager.off('changed', on_changed)
 
