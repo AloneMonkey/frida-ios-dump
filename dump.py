@@ -34,8 +34,8 @@ DUMP_JS = os.path.join(script_dir, 'dump.js')
 
 User = 'root'
 Password = 'alpine'
-Host = 'localhost'
-Port = 2222
+Host = '192.168.31.146'
+Port = 22
 KeyFileName = None
 
 TEMP_DIR = tempfile.gettempdir()
@@ -85,10 +85,13 @@ def generate_ipa(path, display_name):
             if key != 'app':
                 shutil.move(from_dir, to_dir)
 
+        ipafile = os.path.join(os.getcwd(), ipa_filename)
         target_dir = './' + PAYLOAD_DIR
-        zip_args = ('zip', '-qr', os.path.join(os.getcwd(), ipa_filename), target_dir)
-        subprocess.check_call(zip_args, cwd=TEMP_DIR)
-        shutil.rmtree(PAYLOAD_PATH)
+        shutil.make_archive(ipafile, 'zip', target_dir)
+                 #这里要改
+        # zip_args = ('zip', '-qr', os.path.join(os.getcwd(), ipa_filename), target_dir)
+        # subprocess.check_call(zip_args, cwd=TEMP_DIR)
+        # shutil.rmtree(PAYLOAD_PATH)
     except Exception as e:
         print(e)
         finished.set()
@@ -119,12 +122,12 @@ def on_message(message, data):
             with SCPClient(ssh.get_transport(), progress = progress, socket_timeout = 60) as scp:
                 scp.get(scp_from, scp_to)
 
-            chmod_dir = os.path.join(PAYLOAD_PATH, os.path.basename(dump_path))
-            chmod_args = ('chmod', '655', chmod_dir)
-            try:
-                subprocess.check_call(chmod_args)
-            except subprocess.CalledProcessError as err:
-                print(err)
+            # chmod_dir = os.path.join(PAYLOAD_PATH, os.path.basename(dump_path))
+            # chmod_args = ('chmod', '655', chmod_dir)
+            # try:
+            #     subprocess.check_call(chmod_args)
+            # except subprocess.CalledProcessError as err:
+            #     print(err)
 
             index = origin_path.find('.app/')
             file_dict[os.path.basename(dump_path)] = origin_path[index + 5:]
@@ -137,12 +140,12 @@ def on_message(message, data):
             with SCPClient(ssh.get_transport(), progress = progress, socket_timeout = 60) as scp:
                 scp.get(scp_from, scp_to, recursive=True)
 
-            chmod_dir = os.path.join(PAYLOAD_PATH, os.path.basename(app_path))
-            chmod_args = ('chmod', '755', chmod_dir)
-            try:
-                subprocess.check_call(chmod_args)
-            except subprocess.CalledProcessError as err:
-                print(err)
+            # chmod_dir = os.path.join(PAYLOAD_PATH, os.path.basename(app_path))
+            # chmod_args = ('chmod', '755', chmod_dir)
+            # try:
+            #     subprocess.check_call(chmod_args)
+            # except subprocess.CalledProcessError as err:
+            #     print(err)
 
             file_dict['app'] = os.path.basename(app_path)
 
@@ -243,7 +246,8 @@ def create_dir(path):
     path = path.strip()
     path = path.rstrip('\\')
     if os.path.exists(path):
-        shutil.rmtree(path)
+        pass
+        # shutil.rmtree(path)
     try:
         os.makedirs(path)
     except os.error as err:
@@ -357,6 +361,7 @@ if __name__ == '__main__':
         ssh.close()
 
     if os.path.exists(PAYLOAD_PATH):
-        shutil.rmtree(PAYLOAD_PATH)
+        # shutil.rmtree(PAYLOAD_PATH)
+        pass
 
     sys.exit(exit_code)
