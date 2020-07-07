@@ -72,6 +72,14 @@ def get_usb_iphone():
     return device
 
 
+def get_remote_device(host):
+    device = frida.get_device_manager().add_remote_device(host)
+    if not device:
+        print('Remote device not found')
+        sys.exit(-1)
+    return device
+
+
 def generate_ipa(path, display_name):
     ipa_filename = display_name + '.ipa'
 
@@ -292,6 +300,7 @@ def start_dump(session, ipa_name):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='frida-ios-dump (by AloneMonkey v2.0)')
     parser.add_argument('-l', '--list', dest='list_applications', action='store_true', help='List the installed apps')
+    parser.add_argument('-R', '--remote', dest='remote_host', help='Connect to remote device')
     parser.add_argument('-o', '--output', dest='output_ipa', help='Specify name of the decrypted IPA')
     parser.add_argument('-H', '--host', dest='ssh_host', help='Specify SSH hostname')
     parser.add_argument('-p', '--port', dest='ssh_port', help='Specify SSH port')
@@ -305,11 +314,12 @@ if __name__ == '__main__':
     exit_code = 0
     ssh = None
 
-    if not len(sys.argv[1:]):
+    if (not args.target) and (not args.list_applications):
         parser.print_help()
         sys.exit(exit_code)
 
-    device = get_usb_iphone()
+    device = get_remote_device(args.remote_host) if args.remote_host else get_usb_iphone()
+    print('Connect to %s device: %s (id=%s)' % (device.type, device.name, device.id))
 
     if args.list_applications:
         list_applications(device)
