@@ -5,9 +5,14 @@ Pull a decrypted IPA from a jailbroken device
 ## Usage
 
  1. Install [frida](http://www.frida.re/) on device
+
  2. `sudo pip install -r requirements.txt --upgrade`
- 3. Run usbmuxd/iproxy SSH forwarding over USB (Default 2222 -> 22). e.g. `iproxy 2222 22`
- 4. Run ./dump.py `Display name` or `Bundle identifier`
+
+ 3. For USB device: Run usbmuxd/iproxy SSH forwarding over USB (Default 2222 -> 22). e.g. `iproxy 2222 22`
+
+    For remote device: Run frida-server on device. e.g. `frida-server -l 0.0.0.0`
+
+ 4. Run ./dump.py `[-R REMOTE_HOST]` `Display name` or `Bundle identifier`
 
 For SSH/SCP make sure you have your public key added to the target device's ~/.ssh/authorized_keys file.
 
