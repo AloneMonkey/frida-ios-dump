@@ -72,6 +72,36 @@ def get_usb_iphone():
     return device
 
 
+def get_remote_iphone():
+    Type = 'remote'
+    if int(frida.__version__.split('.')[0]) < 12:
+        Type = 'tether'
+    device_manager = frida.get_device_manager()
+    device_manager.add_remote_device(Host)
+    changed = threading.Event()
+
+    def on_changed():
+        changed.set()
+
+    device_manager.on('changed', on_changed)
+
+    device = None
+    while device is None:
+        devices = [dev for dev in device_manager.enumerate_devices() if dev.type == Type]
+        device = [dev for dev in devices if Host in dev.name][0]
+        if device != None:
+            return device
+        if len(devices) == 0:
+            print('Waiting for USB device...')
+            changed.wait()
+        else:
+            device = devices[0]
+
+    device_manager.off('changed', on_changed)
+
+    return device
+
+
 def generate_ipa(path, display_name):
     ipa_filename = display_name + '.ipa'
 
@@ -92,6 +122,7 @@ def generate_ipa(path, display_name):
     except Exception as e:
         print(e)
         finished.set()
+
 
 def on_message(message, data):
     t = tqdm(unit='B',unit_scale=True,unit_divisor=1024,miniters=1)
@@ -149,6 +180,7 @@ def on_message(message, data):
         if 'done' in payload:
             finished.set()
     t.close()
+
 
 def compare_applications(a, b):
     a_is_running = a.pid != 0
@@ -309,25 +341,31 @@ if __name__ == '__main__':
         parser.print_help()
         sys.exit(exit_code)
 
-    device = get_usb_iphone()
+    remote = False
+
+    # update ssh args
+    if args.ssh_host:
+        Host = args.ssh_host
+        remote = True
+    if args.ssh_port:
+        Port = int(args.ssh_port)
+    if args.ssh_user:
+        User = args.ssh_user
+    if args.ssh_password:
+        Password = args.ssh_password
+    if args.ssh_key_filename:
+        KeyFileName = args.ssh_key_filename
+
+    if remote:
+        device = get_remote_iphone()
+    else:
+        device = get_usb_iphone()
 
     if args.list_applications:
         list_applications(device)
     else:
         name_or_bundleid = args.target
         output_ipa = args.output_ipa
-        # update ssh args
-        if args.ssh_host:
-            Host = args.ssh_host
-        if args.ssh_port:
-            Port = int(args.ssh_port)
-        if args.ssh_user:
-            User = args.ssh_user
-        if args.ssh_password:
-            Password = args.ssh_password
-        if args.ssh_key_filename:
-            KeyFileName = args.ssh_key_filename
-
         try:
             ssh = paramiko.SSHClient()
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
