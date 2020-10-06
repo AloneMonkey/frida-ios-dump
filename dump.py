@@ -331,7 +331,12 @@ if __name__ == '__main__':
         try:
             ssh = paramiko.SSHClient()
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            ssh.connect(Host, port=Port, username=User, password=Password, key_filename=KeyFileName)
+            
+            # fix: Exception: key cannot be used for signing
+            if KeyFileName:
+                ssh.connect(Host, port=Port, username=User, password=Password, key_filename=KeyFileName)
+            else:
+                ssh.connect(Host, port=Port, username=User, password=Password, key_filename=KeyFileName, look_for_keys=False, allow_agent=False)
 
             create_dir(PAYLOAD_PATH)
             (session, display_name, bundle_identifier) = open_target_app(device, name_or_bundleid)
