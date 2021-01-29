@@ -262,8 +262,11 @@ def open_target_app(device, name_or_bundleid):
             pid = application.pid
             display_name = application.name
             bundle_identifier = application.identifier
-
+    
     try:
+        if pid == '' :
+            pid = device.get_process(name_or_bundleid).pid
+        
         if not pid:
             pid = device.spawn([bundle_identifier])
             session = device.attach(pid)
