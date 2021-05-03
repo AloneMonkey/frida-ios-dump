@@ -22,6 +22,7 @@ from paramiko import SSHClient
 from scp import SCPClient
 from tqdm import tqdm
 import traceback
+import tempfile
 
 IS_PY2 = sys.version_info[0] < 3
 if IS_PY2:
@@ -38,9 +39,7 @@ Host = 'localhost'
 Port = 2222
 KeyFileName = None
 
-TEMP_DIR = tempfile.gettempdir()
-PAYLOAD_DIR = 'Payload'
-PAYLOAD_PATH = os.path.join(TEMP_DIR, PAYLOAD_DIR)
+PAYLOAD_PATH = os.path.join(tempfile.mkdtemp(), 'Payload')
 file_dict = {}
 
 finished = threading.Event()
@@ -85,9 +84,10 @@ def generate_ipa(path, display_name):
             if key != 'app':
                 shutil.move(from_dir, to_dir)
 
-        target_dir = './' + PAYLOAD_DIR
-        zip_args = ('zip', '-qr', os.path.join(os.getcwd(), ipa_filename), target_dir)
-        subprocess.check_call(zip_args, cwd=TEMP_DIR)
+        IPA_PATH = os.path.join(os.getcwd(), ipa_filename)
+        shutil.make_archive(IPA_PATH, 'zip', os.path.dirname(PAYLOAD_PATH))
+        # make_archive suffixes with .zip, remove that
+        os.rename(IPA_PATH+".zip", IPA_PATH)
         shutil.rmtree(PAYLOAD_PATH)
     except Exception as e:
         print(e)
@@ -120,11 +120,7 @@ def on_message(message, data):
                 scp.get(scp_from, scp_to)
 
             chmod_dir = os.path.join(PAYLOAD_PATH, os.path.basename(dump_path))
-            chmod_args = ('chmod', '655', chmod_dir)
-            try:
-                subprocess.check_call(chmod_args)
-            except subprocess.CalledProcessError as err:
-                print(err)
+            os.chmod(chmod_dir, 0o655)
 
             index = origin_path.find('.app/')
             file_dict[os.path.basename(dump_path)] = origin_path[index + 5:]
@@ -138,11 +134,7 @@ def on_message(message, data):
                 scp.get(scp_from, scp_to, recursive=True)
 
             chmod_dir = os.path.join(PAYLOAD_PATH, os.path.basename(app_path))
-            chmod_args = ('chmod', '755', chmod_dir)
-            try:
-                subprocess.check_call(chmod_args)
-            except subprocess.CalledProcessError as err:
-                print(err)
+            os.chmod(chmod_dir, 0o755)
 
             file_dict['app'] = os.path.basename(app_path)
 
@@ -277,7 +269,7 @@ def open_target_app(device, name_or_bundleid):
 
 
 def start_dump(session, ipa_name):
-    print('Dumping {} to {}'.format(display_name, TEMP_DIR))
+    print('Dumping {} to {}'.format(display_name, PAYLOAD_PATH))
 
     script = load_js_file(session, DUMP_JS)
     script.post('dump')
