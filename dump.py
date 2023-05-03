@@ -263,6 +263,16 @@ def open_target_app(device, name_or_bundleid):
             display_name = application.name
             bundle_identifier = application.identifier
 
+    if not pid:
+        try:
+            process = device.get_process(name_or_bundleid)
+            pid = process.pid
+            display_name = process.name
+            bundle_identifier = name_for_bundleid
+        except frida.ProcessNotFoundError:
+            display_name = name_or_bundleid
+            bundle_identifier = name_or_bundleid
+
     try:
         if not pid:
             pid = device.spawn([bundle_identifier])
