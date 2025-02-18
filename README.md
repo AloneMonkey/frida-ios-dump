@@ -1,18 +1,22 @@
 # frida-ios-dump
 Pull a decrypted IPA from a jailbroken device
 
+Supports 2.x and 3.x
 
 ## Usage
 
- 1. Install [frida](http://www.frida.re/) on device
- 2. `sudo pip install -r requirements.txt --upgrade`
- 3. Run usbmuxd/iproxy SSH forwarding over USB (Default 2222 -> 22). e.g. `iproxy 2222 22`
- 4. Run ./dump.py `Display name` or `Bundle identifier`
+ 1. Install `Frida` package on a jailbroken device via a packet manager. See [documentation](https://frida.re/docs/ios/).
+ 2. Setup SSH forwarding over USB (Default 2222 -> 22)
+    2.1 Install `usbmuxd`, `iproxy`
+    2.2 Run `usbmuxd` as a systemd service (`sudo systemctl start usbmuxd`) or from a terminal (`sudo usbmuxd -f -p`)
+    2.3 `iproxy 2222 22`
+ 3. Run `frida-ps -Us` to list existing apps and find your app.
+ 4. Run `./dump.py <Display name or Bundle identifier>`
 
-For SSH/SCP make sure you have your public key added to the target device's ~/.ssh/authorized_keys file.
+For SSH/SCP make sure you have your public key added to the target device's `~/.ssh/authorized_keys` file.
 
-```
-./dump.py Aftenposten
+```sh
+$ ./dump.py Aftenposten
 Start the target app Aftenposten
 Dumping Aftenposten to /var/folders/wn/9v1hs8ds6nv_xj7g95zxyl140000gn/T
 start dump /var/containers/Bundle/Application/66423A80-0AFE-471C-BC9B-B571107D3C27/AftenpostenApp.app/AftenpostenApp
@@ -40,19 +44,16 @@ Congratulations!!! You've got a decrypted IPA file.
 
 Drag to [MonkeyDev](https://github.com/AloneMonkey/MonkeyDev), Happy hacking!
 
-## Support
+## Troubleshooting
 
-Python 2.x and 3.x
+### "Timeout was reached"
 
+Check if the app is in execution and close it.
 
-### issues
+### "unexpected error while resuming process: (os/kern) failure"
 
-If the following error occurs:
+Open the application before dumping.
 
-* causes device to reboot
-* lost connection
-* unexpected error while probing dyld of target process
+### `dump.py` causes device to rebbot, lost connection, or unexpected error while probing dyld of target process
 
-please open the application before dumping.
-
-
+Open the application before dumping.
