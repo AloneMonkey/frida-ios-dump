@@ -28,7 +28,7 @@ if IS_PY2:
     reload(sys)
     sys.setdefaultencoding('utf8')
 
-script_dir = os.path.dirname(os.path.realpath(__file__))
+script_dir = os.path.dirname(os.path.realpath(__file__))  + '/dist/'
 
 DUMP_JS = os.path.join(script_dir, 'dump.js')
 
@@ -337,7 +337,7 @@ if __name__ == '__main__':
             (session, display_name, bundle_identifier) = open_target_app(device, name_or_bundleid)
             if output_ipa is None:
                 output_ipa = display_name
-            output_ipa = re.sub('\.ipa$', '', output_ipa)
+            output_ipa = re.sub("\\.ipa$", '', output_ipa)
             if session:
                 start_dump(session, output_ipa)
         except paramiko.ssh_exception.NoValidConnectionsError as e:

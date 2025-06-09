@@ -3,3 +3,5 @@
 *.ipa
 
 frida/
+node_modules
+dist/
