@@ -33,7 +33,7 @@ script_dir = os.path.dirname(os.path.realpath(__file__))
 DUMP_JS = os.path.join(script_dir, 'dump.js')
 
 User = 'root'
-Password = 'alpine'
+Password = '10062003'
 Host = 'localhost'
 Port = 2222
 KeyFileName = None
@@ -44,11 +44,11 @@ PAYLOAD_DIR = 'Payload'
 PAYLOAD_PATH = os.path.join(TEMP_DIR, PAYLOAD_DIR)
 file_dict = {}
 
-# Timeouts: SCP for large apps; dump wait timeout
+# Timeouts: SCP para apps grandes pode demorar; wait do dump também
 SCP_SOCKET_TIMEOUT = 300
 DUMP_WAIT_TIMEOUT = 600
 
-# Verbose: print device script console.log on host
+# Verbose: imprime no Mac os console.log do script no device
 VERBOSE = False
 
 finished = threading.Event()
@@ -102,7 +102,7 @@ def generate_ipa(path, display_name):
         finished.set()
 
 def on_message(message, data):
-    # Device logs (console.log from dump.js) arrive as type 'log' or string payload
+    # Logs do device (console.log no dump.js) chegam como type 'log' ou payload string
     if message.get('type') == 'log':
         print('[device] {}'.format(message.get('payload', '')))
         return
@@ -295,7 +295,7 @@ def open_target_app(device, name_or_bundleid, attach_only=False):
         return session, display_name, bundle_identifier
 
     if attach_only and not pid:
-        print('App not running. Open the app on the device and run the command again (or omit -a).')
+        print('App not running. Abra o app no device e rode o comando de novo (ou remova -a).')
         return session, display_name, bundle_identifier
 
     try:
@@ -309,7 +309,7 @@ def open_target_app(device, name_or_bundleid, attach_only=False):
         err_msg = str(e).lower()
         print(e)
         if 'timeout' in err_msg or 'timed out' in err_msg:
-            print('Tip: open the app on the iPhone and run again. Use attach: python dump.py -a <bundle_id>')
+            print('Dica: abra o app no iPhone e execute de novo. Se usar attach: python3.11 dump.py -a <bundle_id>')
         if not display_name:
             display_name = bundle_identifier
 
@@ -327,10 +327,10 @@ def start_dump(session, ipa_name):
         err_msg = str(e).lower()
         print(e)
         if 'timeout' in err_msg or 'timed out' in err_msg:
-            print('Tip: script took too long to load. Open the app on the device before running the dump.')
+            print('Dica: script demorou para carregar. Abra o app no device antes de rodar o dump.')
         return
     if not finished.wait(timeout=DUMP_WAIT_TIMEOUT):
-        print('Timeout ({}s) waiting for dump/SCP. Check: app in foreground, SSH (iproxy 2222 22), and frida-server.'.format(DUMP_WAIT_TIMEOUT))
+        print('Timeout ({}s) aguardando dump/SCP. Verifique: app em foreground, SSH (iproxy 2222 22) e frida-server.'.format(DUMP_WAIT_TIMEOUT))
         if session:
             session.detach()
         return
@@ -351,9 +351,9 @@ if __name__ == '__main__':
     parser.add_argument('-P', '--password', dest='ssh_password', help='Specify SSH password')
     parser.add_argument('-K', '--key_filename', dest='ssh_key_filename', help='Specify SSH private key file path')
     parser.add_argument('-a', '--attach', dest='attach_only', action='store_true',
-                        help='Only attach to already running app (no spawn). Avoids timeout on some devices.')
+                        help='Só anexar ao app já em execução (não faz spawn). Evita timeout em alguns devices.')
     parser.add_argument('-v', '--verbose', dest='verbose', action='store_true',
-                        help='Print device script console.log on host (for debugging).')
+                        help='Mostra no Mac os console.log do script no device (para debug).')
     parser.add_argument('target', nargs='?', help='Bundle identifier or display name of the target app')
 
     args = parser.parse_args()
@@ -401,7 +401,7 @@ if __name__ == '__main__':
             if session:
                 start_dump(session, output_ipa)
             else:
-                print('Could not attach to app. Open the app on the iPhone and try with -a')
+                print('Nao foi possivel anexar ao app. Abra o app no iPhone e tente com -a')
                 exit_code = 1
         except paramiko.ssh_exception.NoValidConnectionsError as e:
             print(e)

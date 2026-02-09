@@ -42,7 +42,7 @@ function putU8(addr, n) {
     if (typeof addr == "number") {
         addr = ptr(addr);
     }
-    addr.writeU8(n);
+    return addr.writeU8(n);
 }
 
 function getU16(addr) {
@@ -56,7 +56,7 @@ function putU16(addr, n) {
     if (typeof addr == "number") {
         addr = ptr(addr);
     }
-    addr.writeU16(n);
+    return addr.writeU16(n);
 }
 
 function getU32(addr) {
@@ -70,7 +70,7 @@ function putU32(addr, n) {
     if (typeof addr == "number") {
         addr = ptr(addr);
     }
-    addr.writeU32(n);
+    return addr.writeU32(n);
 }
 
 function getU64(addr) {
@@ -84,7 +84,7 @@ function putU64(addr, n) {
     if (typeof addr == "number") {
         addr = ptr(addr);
     }
-    addr.writeU64(n);
+    return addr.writeU64(n);
 }
 
 function getPt(addr) {
@@ -101,7 +101,7 @@ function putPt(addr, n) {
     if (typeof n == "number") {
         n = ptr(n);
     }
-    addr.writePointer(n);
+    return addr.writePointer(n);
 }
 
 function malloc(size) {
@@ -324,7 +324,7 @@ function loadAllDynamicLibrary(app_path) {
     if (!ObjC_available) return;
     var defaultManager = ObjC.classes.NSFileManager.defaultManager();
     var errorPtr = Memory.alloc(Process.pointerSize);
-    errorPtr.writePointer(ptr(0));
+    errorPtr.writePointer(ptr(0)); 
     var filenames = defaultManager.contentsOfDirectoryAtPath_error_(app_path, errorPtr);
     for (var i = 0, l = filenames.count(); i < l; i++) {
         var file_name = filenames.objectAtIndex_(i);
@@ -340,7 +340,7 @@ function loadAllDynamicLibrary(app_path) {
                     console.log("[frida-ios-dump]: Load " + file_name + " failed. ");
                 }
             }
-        } else if (file_name.hasSuffix_(".bundle") ||
+        } else if (file_name.hasSuffix_(".bundle") || 
                    file_name.hasSuffix_(".momd") ||
                    file_name.hasSuffix_(".strings") ||
                    file_name.hasSuffix_(".appex") ||
@@ -363,7 +363,7 @@ function loadAllDynamicLibrary(app_path) {
                             console.log("[frida-ios-dump]: " + file_name + " has been dlopen.");
                             break;
                         }
-                    }
+                    } 
 
                     if (!is_loaded) {
                         if (dlopen(allocStr(file_path.UTF8String()), 9)) {
