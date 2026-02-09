@@ -33,15 +33,23 @@ script_dir = os.path.dirname(os.path.realpath(__file__))
 DUMP_JS = os.path.join(script_dir, 'dump.js')
 
 User = 'root'
-Password = 'alpine'
+Password = '10062003'
 Host = 'localhost'
 Port = 2222
 KeyFileName = None
 
 TEMP_DIR = tempfile.gettempdir()
 PAYLOAD_DIR = 'Payload'
+
 PAYLOAD_PATH = os.path.join(TEMP_DIR, PAYLOAD_DIR)
 file_dict = {}
+
+# Timeouts: SCP para apps grandes pode demorar; wait do dump também
+SCP_SOCKET_TIMEOUT = 300
+DUMP_WAIT_TIMEOUT = 600
+
+# Verbose: imprime no Mac os console.log do script no device
+VERBOSE = False
 
 finished = threading.Event()
 
@@ -94,29 +102,47 @@ def generate_ipa(path, display_name):
         finished.set()
 
 def on_message(message, data):
-    t = tqdm(unit='B',unit_scale=True,unit_divisor=1024,miniters=1)
+    # Logs do device (console.log no dump.js) chegam como type 'log' ou payload string
+    if message.get('type') == 'log':
+        print('[device] {}'.format(message.get('payload', '')))
+        return
+    payload_raw = message.get('payload')
+    if isinstance(payload_raw, str):
+        print('[device] {}'.format(payload_raw))
+        return
+    if VERBOSE:
+        print('[msg] {}'.format(message))
+
     last_sent = [0]
 
     def progress(filename, size, sent):
         baseName = os.path.basename(filename)
         if IS_PY2 or isinstance(baseName, bytes):
-            t.desc = baseName.decode("utf-8")
+            desc = baseName.decode("utf-8") if isinstance(baseName, bytes) else baseName
         else:
-            t.desc = baseName
+            desc = baseName if isinstance(baseName, str) else baseName.decode("utf-8", errors="replace")
+        t.desc = desc[:50]
         t.total = size
         t.update(sent - last_sent[0])
         last_sent[0] = 0 if size == sent else sent
 
-    if 'payload' in message:
-        payload = message['payload']
+    if 'payload' not in message:
+        return
+
+    payload = message['payload']
+    t = tqdm(unit='B', unit_scale=True, unit_divisor=1024, miniters=1)
+
+    try:
         if 'dump' in payload:
             origin_path = payload['path']
             dump_path = payload['dump']
+            if not dump_path:
+                t.close()
+                return
 
             scp_from = dump_path
             scp_to = PAYLOAD_PATH + '/'
-
-            with SCPClient(ssh.get_transport(), progress = progress, socket_timeout = 60) as scp:
+            with SCPClient(ssh.get_transport(), progress=progress, socket_timeout=SCP_SOCKET_TIMEOUT) as scp:
                 scp.get(scp_from, scp_to)
 
             chmod_dir = os.path.join(PAYLOAD_PATH, os.path.basename(dump_path))
@@ -131,10 +157,9 @@ def on_message(message, data):
 
         if 'app' in payload:
             app_path = payload['app']
-
             scp_from = app_path
             scp_to = PAYLOAD_PATH + '/'
-            with SCPClient(ssh.get_transport(), progress = progress, socket_timeout = 60) as scp:
+            with SCPClient(ssh.get_transport(), progress=progress, socket_timeout=SCP_SOCKET_TIMEOUT) as scp:
                 scp.get(scp_from, scp_to, recursive=True)
 
             chmod_dir = os.path.join(PAYLOAD_PATH, os.path.basename(app_path))
@@ -148,7 +173,8 @@ def on_message(message, data):
 
         if 'done' in payload:
             finished.set()
-    t.close()
+    finally:
+        t.close()
 
 def compare_applications(a, b):
     a_is_running = a.pid != 0
@@ -250,10 +276,10 @@ def create_dir(path):
         print(err)
 
 
-def open_target_app(device, name_or_bundleid):
+def open_target_app(device, name_or_bundleid, attach_only=False):
     print('Start the target app {}'.format(name_or_bundleid))
 
-    pid = ''
+    pid = 0
     session = None
     display_name = ''
     bundle_identifier = ''
@@ -262,6 +288,15 @@ def open_target_app(device, name_or_bundleid):
             pid = application.pid
             display_name = application.name
             bundle_identifier = application.identifier
+            break
+
+    if not bundle_identifier:
+        print('App not found: {}'.format(name_or_bundleid))
+        return session, display_name, bundle_identifier
+
+    if attach_only and not pid:
+        print('App not running. Abra o app no device e rode o comando de novo (ou remova -a).')
+        return session, display_name, bundle_identifier
 
     try:
         if not pid:
@@ -271,17 +306,34 @@ def open_target_app(device, name_or_bundleid):
         else:
             session = device.attach(pid)
     except Exception as e:
-        print(e) 
+        err_msg = str(e).lower()
+        print(e)
+        if 'timeout' in err_msg or 'timed out' in err_msg:
+            print('Dica: abra o app no iPhone e execute de novo. Se usar attach: python3.11 dump.py -a <bundle_id>')
+        if not display_name:
+            display_name = bundle_identifier
 
     return session, display_name, bundle_identifier
 
 
 def start_dump(session, ipa_name):
     print('Dumping {} to {}'.format(display_name, TEMP_DIR))
+    finished.clear()
 
-    script = load_js_file(session, DUMP_JS)
-    script.post('dump')
-    finished.wait()
+    try:
+        script = load_js_file(session, DUMP_JS)
+        script.post('dump')
+    except Exception as e:
+        err_msg = str(e).lower()
+        print(e)
+        if 'timeout' in err_msg or 'timed out' in err_msg:
+            print('Dica: script demorou para carregar. Abra o app no device antes de rodar o dump.')
+        return
+    if not finished.wait(timeout=DUMP_WAIT_TIMEOUT):
+        print('Timeout ({}s) aguardando dump/SCP. Verifique: app em foreground, SSH (iproxy 2222 22) e frida-server.'.format(DUMP_WAIT_TIMEOUT))
+        if session:
+            session.detach()
+        return
 
     generate_ipa(PAYLOAD_PATH, ipa_name)
 
@@ -298,6 +350,10 @@ if __name__ == '__main__':
     parser.add_argument('-u', '--user', dest='ssh_user', help='Specify SSH username')
     parser.add_argument('-P', '--password', dest='ssh_password', help='Specify SSH password')
     parser.add_argument('-K', '--key_filename', dest='ssh_key_filename', help='Specify SSH private key file path')
+    parser.add_argument('-a', '--attach', dest='attach_only', action='store_true',
+                        help='Só anexar ao app já em execução (não faz spawn). Evita timeout em alguns devices.')
+    parser.add_argument('-v', '--verbose', dest='verbose', action='store_true',
+                        help='Mostra no Mac os console.log do script no device (para debug).')
     parser.add_argument('target', nargs='?', help='Bundle identifier or display name of the target app')
 
     args = parser.parse_args()
@@ -327,6 +383,8 @@ if __name__ == '__main__':
             Password = args.ssh_password
         if args.ssh_key_filename:
             KeyFileName = args.ssh_key_filename
+        if args.verbose:
+            VERBOSE = True
 
         try:
             ssh = paramiko.SSHClient()
@@ -334,12 +392,17 @@ if __name__ == '__main__':
             ssh.connect(Host, port=Port, username=User, password=Password, key_filename=KeyFileName)
 
             create_dir(PAYLOAD_PATH)
-            (session, display_name, bundle_identifier) = open_target_app(device, name_or_bundleid)
+            (session, display_name, bundle_identifier) = open_target_app(
+                device, name_or_bundleid, attach_only=args.attach_only
+            )
             if output_ipa is None:
                 output_ipa = display_name
             output_ipa = re.sub('\.ipa$', '', output_ipa)
             if session:
                 start_dump(session, output_ipa)
+            else:
+                print('Nao foi possivel anexar ao app. Abra o app no iPhone e tente com -a')
+                exit_code = 1
         except paramiko.ssh_exception.NoValidConnectionsError as e:
             print(e)
             print('Try specifying -H/--hostname and/or -p/--port')
