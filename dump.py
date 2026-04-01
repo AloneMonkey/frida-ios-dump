@@ -18,6 +18,7 @@ import tempfile
 import subprocess
 import re
 import paramiko
+import frida_tools
 from paramiko import SSHClient
 from scp import SCPClient
 from tqdm import tqdm
@@ -34,8 +35,8 @@ DUMP_JS = os.path.join(script_dir, 'dump.js')
 
 User = 'root'
 Password = 'alpine'
-Host = 'localhost'
-Port = 2222
+Host = '192.168.0.12'
+Port = 22
 KeyFileName = None
 
 TEMP_DIR = tempfile.gettempdir()
@@ -47,9 +48,6 @@ finished = threading.Event()
 
 
 def get_usb_iphone():
-    Type = 'usb'
-    if int(frida.__version__.split('.')[0]) < 12:
-        Type = 'tether'
     device_manager = frida.get_device_manager()
     changed = threading.Event()
 
@@ -60,10 +58,11 @@ def get_usb_iphone():
 
     device = None
     while device is None:
-        devices = [dev for dev in device_manager.enumerate_devices() if dev.type == Type]
+        devices = [dev for dev in device_manager.enumerate_devices() if dev.type == 'usb']
         if len(devices) == 0:
             print('Waiting for USB device...')
             changed.wait()
+            changed.clear()
         else:
             device = devices[0]
 
@@ -94,7 +93,19 @@ def generate_ipa(path, display_name):
         finished.set()
 
 def on_message(message, data):
-    t = tqdm(unit='B',unit_scale=True,unit_divisor=1024,miniters=1)
+    if message['type'] == 'error':
+        print('[JS Error]', message.get('description', ''))
+        if message.get('stack'):
+            print(message['stack'])
+        finished.set()
+        return
+    if message['type'] == 'log':
+        print('[JS]', message.get('payload', ''))
+        return
+    if message['type'] != 'send':
+        return
+
+    t = tqdm(unit='B', unit_scale=True, unit_divisor=1024, miniters=1)
     last_sent = [0]
 
     def progress(filename, size, sent):
@@ -116,7 +127,7 @@ def on_message(message, data):
             scp_from = dump_path
             scp_to = PAYLOAD_PATH + '/'
 
-            with SCPClient(ssh.get_transport(), progress = progress, socket_timeout = 60) as scp:
+            with SCPClient(ssh.get_transport(), progress = progress, socket_timeout = 120) as scp:
                 scp.get(scp_from, scp_to)
 
             chmod_dir = os.path.join(PAYLOAD_PATH, os.path.basename(dump_path))
@@ -134,7 +145,7 @@ def on_message(message, data):
 
             scp_from = app_path
             scp_to = PAYLOAD_PATH + '/'
-            with SCPClient(ssh.get_transport(), progress = progress, socket_timeout = 60) as scp:
+            with SCPClient(ssh.get_transport(), progress = progress, socket_timeout = 120) as scp:
                 scp.get(scp_from, scp_to, recursive=True)
 
             chmod_dir = os.path.join(PAYLOAD_PATH, os.path.basename(app_path))
@@ -230,6 +241,10 @@ def list_applications(device):
 
 def load_js_file(session, filename):
     source = ''
+    bridge_path = os.path.join(os.path.dirname(frida_tools.__file__), 'bridges', 'objc.js')
+    if os.path.exists(bridge_path):
+        with codecs.open(bridge_path, 'r', 'utf-8') as f:
+            source = f.read() + '\nglobalThis.ObjC = bridge;\n'
     with codecs.open(filename, 'r', 'utf-8') as f:
         source = source + f.read()
     script = session.create_script(source)
