@@ -1,4 +1,6 @@
-Module.ensureInitialized('Foundation');
+// frida-ios-dump agent -- ported to the Frida 17 API surface.
+// No ObjC bridge: Frida 17 no longer bundles it, so directory walking and
+// path discovery are done with libSystem exports instead.
 
 var O_RDONLY = 0;
 var O_WRONLY = 1;
@@ -9,127 +11,66 @@ var SEEK_SET = 0;
 var SEEK_CUR = 1;
 var SEEK_END = 2;
 
+var DT_DIR = 4;
+var DT_REG = 8;
+var DT_LNK = 10;
+
 function allocStr(str) {
     return Memory.allocUtf8String(str);
 }
 
-function putStr(addr, str) {
-    if (typeof addr == "number") {
-        addr = ptr(addr);
-    }
-    return Memory.writeUtf8String(addr, str);
-}
-
-function getByteArr(addr, l) {
-    if (typeof addr == "number") {
-        addr = ptr(addr);
-    }
-    return Memory.readByteArray(addr, l);
+function toPtr(addr) {
+    return (typeof addr == "number") ? ptr(addr) : addr;
 }
 
 function getU8(addr) {
-    if (typeof addr == "number") {
-        addr = ptr(addr);
-    }
-    return Memory.readU8(addr);
-}
-
-function putU8(addr, n) {
-    if (typeof addr == "number") {
-        addr = ptr(addr);
-    }
-    return Memory.writeU8(addr, n);
+    return toPtr(addr).readU8();
 }
 
 function getU16(addr) {
-    if (typeof addr == "number") {
-        addr = ptr(addr);
-    }
-    return Memory.readU16(addr);
-}
-
-function putU16(addr, n) {
-    if (typeof addr == "number") {
-        addr = ptr(addr);
-    }
-    return Memory.writeU16(addr, n);
+    return toPtr(addr).readU16();
 }
 
 function getU32(addr) {
-    if (typeof addr == "number") {
-        addr = ptr(addr);
-    }
-    return Memory.readU32(addr);
-}
-
-function putU32(addr, n) {
-    if (typeof addr == "number") {
-        addr = ptr(addr);
-    }
-    return Memory.writeU32(addr, n);
+    return toPtr(addr).readU32();
 }
 
 function getU64(addr) {
-    if (typeof addr == "number") {
-        addr = ptr(addr);
-    }
-    return Memory.readU64(addr);
+    return toPtr(addr).readU64();
 }
 
 function putU64(addr, n) {
-    if (typeof addr == "number") {
-        addr = ptr(addr);
-    }
-    return Memory.writeU64(addr, n);
+    return toPtr(addr).writeU64(n);
 }
 
 function getPt(addr) {
-    if (typeof addr == "number") {
-        addr = ptr(addr);
-    }
-    return Memory.readPointer(addr);
-}
-
-function putPt(addr, n) {
-    if (typeof addr == "number") {
-        addr = ptr(addr);
-    }
-    if (typeof n == "number") {
-        n = ptr(n);
-    }
-    return Memory.writePointer(addr, n);
+    return toPtr(addr).readPointer();
 }
 
 function malloc(size) {
     return Memory.alloc(size);
 }
 
+function findGlobalExport(name) {
+    if (typeof Module.findGlobalExportByName === "function") {
+        return Module.findGlobalExportByName(name);
+    }
+    return Module.findExportByName(null, name);
+}
+
 function getExportFunction(type, name, ret, args) {
-    var nptr;
-    nptr = Module.findExportByName(null, name);
+    var nptr = findGlobalExport(name);
     if (nptr === null) {
         console.log("cannot find " + name);
         return null;
-    } else {
-        if (type === "f") {
-            var funclet = new NativeFunction(nptr, ret, args);
-            if (typeof funclet === "undefined") {
-                console.log("parse error " + name);
-                return null;
-            }
-            return funclet;
-        } else if (type === "d") {
-            var datalet = Memory.readPointer(nptr);
-            if (typeof datalet === "undefined") {
-                console.log("parse error " + name);
-                return null;
-            }
-            return datalet;
-        }
+    }
+    if (type === "f") {
+        return new NativeFunction(nptr, ret, args);
+    } else if (type === "d") {
+        return nptr.readPointer();
     }
 }
 
-var NSSearchPathForDirectoriesInDomains = getExportFunction("f", "NSSearchPathForDirectoriesInDomains", "pointer", ["int", "int", "int"]);
 var wrapper_open = getExportFunction("f", "open", "int", ["pointer", "int", "int"]);
 var read = getExportFunction("f", "read", "int", ["int", "pointer", "int"]);
 var write = getExportFunction("f", "write", "int", ["int", "pointer", "int"]);
@@ -138,13 +79,10 @@ var close = getExportFunction("f", "close", "int", ["int"]);
 var remove = getExportFunction("f", "remove", "int", ["pointer"]);
 var access = getExportFunction("f", "access", "int", ["pointer", "int"]);
 var dlopen = getExportFunction("f", "dlopen", "pointer", ["pointer", "int"]);
-
-function getDocumentDir() {
-    var NSDocumentDirectory = 9;
-    var NSUserDomainMask = 1;
-    var npdirs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, 1);
-    return ObjC.Object(npdirs).objectAtIndex_(0).toString();
-}
+var getenv = getExportFunction("f", "getenv", "pointer", ["pointer"]);
+var opendir = getExportFunction("f", "opendir", "pointer", ["pointer"]);
+var readdir = getExportFunction("f", "readdir", "pointer", ["pointer"]);
+var closedir = getExportFunction("f", "closedir", "int", ["pointer"]);
 
 function open(pathname, flags, mode) {
     if (typeof pathname == "string") {
@@ -153,16 +91,70 @@ function open(pathname, flags, mode) {
     return wrapper_open(pathname, flags, mode);
 }
 
+function exists(path) {
+    return access(allocStr(path), 0) === 0;
+}
+
+// The app sandbox HOME is the data container, which always holds Documents/.
+function getDocumentDir() {
+    var home = getenv(allocStr("HOME"));
+    if (home.isNull()) {
+        return "/tmp";
+    }
+    var docs = home.readUtf8String() + "/Documents";
+    return exists(docs) ? docs : home.readUtf8String() + "/tmp";
+}
+
+// struct dirent (arm64, 64-bit inode): ino 0, seekoff 8, reclen 16,
+// namlen 18, type 20, name 21.
+var DIRENT_TYPE_OFFSET = 20;
+var DIRENT_NAME_OFFSET = 21;
+
+function listDir(path) {
+    var entries = [];
+    var dir = opendir(allocStr(path));
+    if (dir.isNull()) {
+        return entries;
+    }
+    var entry;
+    while (!(entry = readdir(dir)).isNull()) {
+        var name = entry.add(DIRENT_NAME_OFFSET).readUtf8String();
+        if (name === "." || name === "..") {
+            continue;
+        }
+        entries.push({ name: name, type: getU8(entry.add(DIRENT_TYPE_OFFSET)) });
+    }
+    closedir(dir);
+    return entries;
+}
+
 var modules = null;
 function getAllAppModules() {
-    modules = new Array();
-    var tmpmods = Process.enumerateModulesSync();
+    modules = [];
+    var tmpmods = Process.enumerateModules();
     for (var i = 0; i < tmpmods.length; i++) {
         if (tmpmods[i].path.indexOf(".app") != -1) {
             modules.push(tmpmods[i]);
         }
     }
     return modules;
+}
+
+// The main executable lives directly inside the .app bundle. Note that module
+// index 0 is not reliable: jailbreak tooling (e.g. Dopamine's systemhook.dylib)
+// is injected ahead of the app binary.
+function getAppPath() {
+    var main = Process.mainModule;
+    if (main === undefined || main === null) {
+        var mods = Process.enumerateModules();
+        for (var i = 0; i < mods.length; i++) {
+            if (mods[i].path.indexOf(".app/") != -1) {
+                main = mods[i];
+                break;
+            }
+        }
+    }
+    return main.path.substring(0, main.path.lastIndexOf("/"));
 }
 
 var FAT_MAGIC = 0xcafebabe;
@@ -177,17 +169,17 @@ var LC_ENCRYPTION_INFO = 0x21;
 var LC_ENCRYPTION_INFO_64 = 0x2C;
 
 function pad(str, n) {
-    return Array(n-str.length+1).join("0")+str;
+    return Array(n - str.length + 1).join("0") + str;
 }
 
 function swap32(value) {
-    value = pad(value.toString(16),8)
+    value = pad(value.toString(16), 8)
     var result = "";
-    for(var i = 0; i < value.length; i=i+2){
+    for (var i = 0; i < value.length; i = i + 2) {
         result += value.charAt(value.length - i - 2);
         result += value.charAt(value.length - i - 1);
     }
-    return parseInt(result,16)
+    return parseInt(result, 16)
 }
 
 function dumpModule(name) {
@@ -206,14 +198,13 @@ function dumpModule(name) {
         console.log("Cannot find module");
         return;
     }
-    var modbase = modules[i].base;
-    var modsize = modules[i].size;
-    var newmodname = modules[i].name;
+    var modbase = targetmod.base;
+    var modsize = targetmod.size;
+    var newmodname = targetmod.name;
     var newmodpath = getDocumentDir() + "/" + newmodname + ".fid";
-    var oldmodpath = modules[i].path;
+    var oldmodpath = targetmod.path;
 
-
-    if(!access(allocStr(newmodpath),0)){
+    if (exists(newmodpath)) {
         remove(allocStr(newmodpath));
     }
 
@@ -233,7 +224,7 @@ function dumpModule(name) {
     if (magic == MH_MAGIC || magic == MH_CIGAM) {
         is64bit = false;
         size_of_mach_header = 28;
-    }else if (magic == MH_MAGIC_64 || magic == MH_CIGAM_64) {
+    } else if (magic == MH_MAGIC_64 || magic == MH_CIGAM_64) {
         is64bit = true;
         size_of_mach_header = 32;
     }
@@ -246,13 +237,13 @@ function dumpModule(name) {
     var fileoffset = 0;
     var filesize = 0;
     magic = getU32(buffer);
-    if(magic == FAT_CIGAM || magic == FAT_MAGIC){
+    if (magic == FAT_CIGAM || magic == FAT_MAGIC) {
         var off = 4;
         var archs = swap32(getU32(buffer.add(off)));
         for (var i = 0; i < archs; i++) {
             var cputype = swap32(getU32(buffer.add(off + 4)));
             var cpusubtype = swap32(getU32(buffer.add(off + 8)));
-            if(cur_cpu_type == cputype && cur_cpu_subtype == cpusubtype){
+            if (cur_cpu_type == cputype && cur_cpu_subtype == cpusubtype) {
                 fileoffset = swap32(getU32(buffer.add(off + 12)));
                 filesize = swap32(getU32(buffer.add(off + 16)));
                 break;
@@ -260,24 +251,24 @@ function dumpModule(name) {
             off += 20;
         }
 
-        if(fileoffset == 0 || filesize == 0)
+        if (fileoffset == 0 || filesize == 0)
             return;
 
         lseek(fmodule, 0, SEEK_SET);
         lseek(foldmodule, fileoffset, SEEK_SET);
-        for(var i = 0; i < parseInt(filesize / BUFSIZE); i++) {
+        for (var i = 0; i < parseInt(filesize / BUFSIZE); i++) {
             read(foldmodule, buffer, BUFSIZE);
             write(fmodule, buffer, BUFSIZE);
         }
-        if(filesize % BUFSIZE){
+        if (filesize % BUFSIZE) {
             read(foldmodule, buffer, filesize % BUFSIZE);
             write(fmodule, buffer, filesize % BUFSIZE);
         }
-    }else{
+    } else {
         var readLen = 0;
         lseek(foldmodule, 0, SEEK_SET);
         lseek(fmodule, 0, SEEK_SET);
-        while(readLen = read(foldmodule, buffer, BUFSIZE)) {
+        while (readLen = read(foldmodule, buffer, BUFSIZE)) {
             write(fmodule, buffer, readLen);
         }
     }
@@ -287,7 +278,6 @@ function dumpModule(name) {
     var offset_cryptid = -1;
     var crypt_off = 0;
     var crypt_size = 0;
-    var segments = [];
     for (var i = 0; i < ncmds; i++) {
         var cmd = getU32(modbase.add(off));
         var cmdsize = getU32(modbase.add(off + 4));
@@ -313,76 +303,82 @@ function dumpModule(name) {
     return newmodpath
 }
 
-function loadAllDynamicLibrary(app_path) {
-    var defaultManager = ObjC.classes.NSFileManager.defaultManager();
-    var errorPtr = Memory.alloc(Process.pointerSize); 
-    Memory.writePointer(errorPtr, NULL); 
-    var filenames = defaultManager.contentsOfDirectoryAtPath_error_(app_path, errorPtr);
-    for (var i = 0, l = filenames.count(); i < l; i++) {
-        var file_name = filenames.objectAtIndex_(i);
-        var file_path = app_path.stringByAppendingPathComponent_(file_name);
-        if (file_name.hasSuffix_(".framework")) {
-            var bundle = ObjC.classes.NSBundle.bundleWithPath_(file_path);
-            if (bundle.isLoaded()) {
-                console.log("[frida-ios-dump]: " + file_name + " has been loaded. ");
-            } else {
-                if (bundle.load()) {
-                    console.log("[frida-ios-dump]: Load " + file_name + " success. ");
-                } else {
-                    console.log("[frida-ios-dump]: Load " + file_name + " failed. ");
-                }
-            }
-        } else if (file_name.hasSuffix_(".bundle") || 
-                   file_name.hasSuffix_(".momd") ||
-                   file_name.hasSuffix_(".strings") ||
-                   file_name.hasSuffix_(".appex") ||
-                   file_name.hasSuffix_(".app") ||
-                   file_name.hasSuffix_(".lproj") ||
-                   file_name.hasSuffix_(".storyboardc")) {
-            continue;
-        } else {
-            var isDirPtr = Memory.alloc(Process.pointerSize);
-            Memory.writePointer(isDirPtr,NULL);
-            defaultManager.fileExistsAtPath_isDirectory_(file_path, isDirPtr);
-            if (Memory.readPointer(isDirPtr) == 1) {
-                loadAllDynamicLibrary(file_path);
-            } else {
-                if (file_name.hasSuffix_(".dylib")) {
-                    var is_loaded = 0;
-                    for (var j = 0; j < modules.length; j++) {
-                        if (modules[j].path.indexOf(file_name) != -1) {
-                            is_loaded = 1;
-                            console.log("[frida-ios-dump]: " + file_name + " has been dlopen.");
-                            break;
-                        }
-                    } 
+var SKIP_SUFFIXES = [".bundle", ".momd", ".strings", ".appex", ".app", ".lproj", ".storyboardc"];
 
-                    if (!is_loaded) {
-                        if (dlopen(allocStr(file_path.UTF8String()), 9)) {
-                            console.log("[frida-ios-dump]: dlopen " + file_name + " success. ");
-                        } else {
-                            console.log("[frida-ios-dump]: dlopen " + file_name + " failed. ");
-                        }
-                    }
-                }
+function hasSuffix(str, suffix) {
+    return str.length >= suffix.length && str.indexOf(suffix, str.length - suffix.length) !== -1;
+}
+
+function isLoaded(path) {
+    for (var j = 0; j < modules.length; j++) {
+        if (modules[j].path.indexOf(path) != -1) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function tryDlopen(path, label) {
+    if (isLoaded(label)) {
+        console.log("[frida-ios-dump]: " + label + " has been loaded.");
+        return;
+    }
+    if (dlopen(allocStr(path), 9).isNull()) {
+        console.log("[frida-ios-dump]: Load " + label + " failed.");
+    } else {
+        console.log("[frida-ios-dump]: Load " + label + " success.");
+    }
+}
+
+function loadAllDynamicLibrary(app_path) {
+    var entries = listDir(app_path);
+    for (var i = 0; i < entries.length; i++) {
+        var file_name = entries[i].name;
+        var file_path = app_path + "/" + file_name;
+
+        if (hasSuffix(file_name, ".framework")) {
+            // Framework binary conventionally shares the bundle's base name.
+            var binary = file_path + "/" + file_name.substring(0, file_name.length - ".framework".length);
+            if (exists(binary)) {
+                tryDlopen(binary, file_name);
+            } else {
+                console.log("[frida-ios-dump]: Cannot locate binary of " + file_name);
             }
+            continue;
+        }
+
+        var skip = false;
+        for (var s = 0; s < SKIP_SUFFIXES.length; s++) {
+            if (hasSuffix(file_name, SKIP_SUFFIXES[s])) {
+                skip = true;
+                break;
+            }
+        }
+        if (skip) {
+            continue;
+        }
+
+        if (entries[i].type == DT_DIR) {
+            loadAllDynamicLibrary(file_path);
+        } else if (hasSuffix(file_name, ".dylib")) {
+            tryDlopen(file_path, file_name);
         }
     }
 }
 
 function handleMessage(message) {
     modules = getAllAppModules();
-    var app_path = ObjC.classes.NSBundle.mainBundle().bundlePath();
+    var app_path = getAppPath();
     loadAllDynamicLibrary(app_path);
     // start dump
     modules = getAllAppModules();
-    for (var i = 0; i  < modules.length; i++) {
+    for (var i = 0; i < modules.length; i++) {
         console.log("start dump " + modules[i].path);
         var result = dumpModule(modules[i].path);
-        send({ dump: result, path: modules[i].path});
+        send({ dump: result, path: modules[i].path });
     }
-    send({app: app_path.toString()});
-    send({done: "ok"});
+    send({ app: app_path });
+    send({ done: "ok" });
     recv(handleMessage);
 }
 
