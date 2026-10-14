@@ -81,21 +81,16 @@ Validated with Frida 17.23.3 on a jailbroken iPhone X running iOS 16.7.16: app e
 Run the host regression tests with `python -m unittest discover -s tests -v`.
 
 
-### issues
+## Troubleshooting
 
-If the following error occurs:
+| Problem | What to check |
+| --- | --- |
+| Cannot start or attach to the app | Unlock the device, open the target app manually, then retry. |
+| `ObjC is not defined` or missing bridge | Run `npm install` in the repository and use this version of `dump.py`. |
+| Frida connection or protocol error | Check that frida-server is running and the host and device Frida versions match. |
+| SSH authentication failed | Check the SSH username, password or private key, and any settings in your SSH alias. |
 
-* causes device to reboot
-* lost connection
-* unexpected error while probing dyld of target process
-
-please open the application before dumping.
-
-For `ObjC is not defined` or missing bridge errors, run `npm install` in this repository and use the updated `dump.py` to load the agent. For connection or protocol errors, check that the host and device Frida versions match. Agent errors and unexpected session detaches now abort the dump instead of waiting indefinitely.
-
-Frida messages are queued and file transfers run outside its callbacks, so USB channel events can continue during SCP downloads. Keep this separation when changing message handlers; blocking SCP calls inside a Frida callback can stall a download at `0 B`.
-
-The main-queue startup check switches back to Frida's script thread before receiving dump requests. Interrupting with Ctrl+C or encountering a transfer failure cancels queued downloads and closes the SSH connection to unblock active downloads before waiting for workers to stop. Ctrl+C exits with status 130.
+If the problem persists, open an issue with the full error output, iOS version, and host/device Frida versions. Remove passwords and other private information from the logs.
 
 ## 认识更多同行 · 新识 HiNexus
 
