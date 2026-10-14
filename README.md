@@ -1,15 +1,47 @@
 # frida-ios-dump
 Pull a decrypted IPA from a jailbroken device
 
+## AI automation
+
+Give your AI tool the link to [SKILL.md](SKILL.md) and ask it to follow the instructions to set up the environment and export your chosen app. The file covers repository download, dependencies, direct USB SSH, SSH aliases, optional key setup, and IPA validation. A jailbroken device with Frida and SSH running is required.
+
 
 ## Usage
 
- 1. Install [frida](http://www.frida.re/) on device
- 2. `sudo pip install -r requirements.txt --upgrade`
- 3. Run usbmuxd/iproxy SSH forwarding over USB (Default 2222 -> 22). e.g. `iproxy 2222 22`
- 4. Run ./dump.py `Display name` or `Bundle identifier`
+ 1. Install [Frida](https://frida.re/) on the jailbroken device. Use the same Frida version on the device and host (current target: 17.23.3).
+ 2. Set up Python 3.10+ and the Objective-C bridge dependency (requires Node.js/npm):
+
+    ```sh
+    python3 -m venv .venv
+    source .venv/bin/activate
+    python -m pip install --upgrade -r requirements.txt
+    npm install
+    ```
+
+    Alternatively, `pnpm install --frozen-lockfile` installs the bridge using the included lockfile.
+
+ 3. Connect the unlocked device over USB and ensure its SSH service is running. The script connects directly to device SSH port 22 through Frida's USB channel. No local port forwarding or `iproxy` is required. `-p` selects the device SSH port. An explicit remote hostname/IP uses TCP; a localhost alias on port 22 uses USB.
+ 4. Run `python dump.py 'Display name'` or `python dump.py Bundle.identifier`. Use `python dump.py -l` to list installed apps.
+
+The agent explicitly imports `frida-objc-bridge`, and `dump.py` bundles it with `frida.Compiler` before injection. This is required because Frida 17 no longer includes the Objective-C bridge in scripts loaded through the Python API. No separate agent build command is needed. See the official [bridge documentation](https://frida.re/docs/bridges/) and [Frida 17 migration notes](https://frida.re/news/2025/05/17/frida-17-0-0-released/).
+
+Dumped binaries are downloaded once, with up to four downloads running in parallel as the agent finishes each module. After all binary downloads complete, app directories are scanned and discovered resource files are immediately queued for up to four parallel downloads using the existing Paramiko SFTP dependency, skipping the exact paths of those binaries. During scanning, progress shows downloaded bytes and scanned entries; once the total size is known, it shows the overall percentage without resetting downloaded bytes. Directory structure, permissions and symbolic links are preserved before the decrypted binaries are placed into the IPA.
 
 For SSH/SCP make sure you have your public key added to the target device's ~/.ssh/authorized_keys file.
+
+The default SSH credentials are `root` / `alpine`. For a different account, use `./dump.py -u mobile -P 'YOUR_SSH_PASSWORD' Bundle.identifier`, or supply a private key with `-K`. Keys are tried first; the configured default password or explicit `-P` remains available as a fallback if key authentication fails.
+
+`-H` also accepts aliases from `~/.ssh/config`, reading `HostName`, `Port`, `User` and `IdentityFile`. Command-line options override these settings. For example:
+
+```sshconfig
+Host iphone
+    HostName 127.0.0.1
+    Port 22
+    User mobile
+    IdentityFile ~/.ssh/frida_ios_dump_ed25519
+```
+
+Then run `./dump.py -H iphone Bundle.identifier`. The USB transport is provided by `dump.py`; this alias alone does not establish a USB connection for the system `ssh` command.
 
 ```
 ./dump.py Aftenposten
@@ -42,7 +74,11 @@ Drag to [MonkeyDev](https://github.com/AloneMonkey/MonkeyDev), Happy hacking!
 
 ## Support
 
-Python 2.x and 3.x
+Python 3.10+ and Frida 17.23.3 / 17.x. Python 2 is no longer supported.
+
+Validated with Frida 17.23.3 on a jailbroken iPhone X running iOS 16.7.16: app enumeration, agent injection, module dumping, direct USB SSH/SCP download using the `mobile` user and SSH alias, and IPA packaging. The exported IPA passed ZIP integrity checks, and the main executable's encryption flag changed from `cryptid=1` to `cryptid=0` with different bytes in the encrypted region. Keep the device unlocked during startup and dumping.
+
+Run the host regression tests with `python -m unittest discover -s tests -v`.
 
 
 ### issues
@@ -55,4 +91,22 @@ If the following error occurs:
 
 please open the application before dumping.
 
+For `ObjC is not defined` or missing bridge errors, run `npm install` in this repository and use the updated `dump.py` to load the agent. For connection or protocol errors, check that the host and device Frida versions match. Agent errors and unexpected session detaches now abort the dump instead of waiting indefinitely.
 
+Frida messages are queued and file transfers run outside its callbacks, so USB channel events can continue during SCP downloads. Keep this separation when changing message handlers; blocking SCP calls inside a Frida callback can stall a download at `0 B`.
+
+The main-queue startup check switches back to Frida's script thread before receiving dump requests. Interrupting with Ctrl+C or encountering a transfer failure cancels queued downloads and closes the SSH connection to unblock active downloads before waiting for workers to stop. Ctrl+C exits with status 130.
+
+## 认识更多同行 · 新识 HiNexus
+
+除了分享代码，也欢迎来我做的社群网站 [新识 HiNexus](https://hinexus.me) 认识更多有趣的人。
+
+免费创建你的职业个人主页，展示经历、专业方向、能提供的帮助和正在寻找的合作，让志同道合的人更容易找到你。无论你关注移动安全、逆向工程、独立开发还是 AI，都欢迎来介绍自己、交流想法、寻找合作伙伴。
+
+**[来新识，认识一下 →](https://hinexus.me)**
+
+## 关注我的公众号
+
+欢迎扫码关注我的微信公众号，一起交流技术与实践。
+
+<img src="assets/wechat-official-account.png" alt="微信公众号关注二维码" width="280" />

@@ -1,0 +1,22 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      frida-objc-bridge:
+        specifier: ^8.0.0
+        version: 8.0.6
+
+packages:
+
+  frida-objc-bridge@8.0.6:
+    resolution: {integrity: sha512-FafCVXbh8837VIyYv9OjJFwPv8w3EiJbDpdQbK50316TfY1paK8URiICzEQIboRLgAjtoi9MugXnys2DOZbiUg==}
+
+snapshots:
+
+  frida-objc-bridge@8.0.6: {}

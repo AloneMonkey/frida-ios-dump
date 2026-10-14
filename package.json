@@ -1,0 +1,9 @@
+{
+  "name": "frida-ios-dump",
+  "private": true,
+  "version": "3.0.0",
+  "description": "Objective-C bridge dependency for the Frida dump agent",
+  "dependencies": {
+    "frida-objc-bridge": "^8.0.0"
+  }
+}
