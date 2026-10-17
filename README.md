@@ -104,6 +104,6 @@ If the problem persists, open an issue with the full error output, iOS version, 
 
 欢迎扫码关注我的微信公众号，或添加个人微信，一起交流技术与实践。
 
-| 微信公众号 | 个人微信 · AloneMonkey |
+| 个人微信 · AloneMonkey | 微信公众号 |
 | :---: | :---: |
-| <img src="assets/wechat-official-account.png" alt="微信公众号关注二维码" width="280" /> | <img src="assets/wechat-personal.jpg" alt="AloneMonkey 个人微信二维码" width="280" /> |
+| <img src="assets/wechat-personal.jpg" alt="AloneMonkey 个人微信二维码" width="280" /> | <img src="assets/wechat-official-account.png" alt="微信公众号关注二维码" width="280" /> |
