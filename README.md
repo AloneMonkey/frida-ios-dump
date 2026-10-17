@@ -100,8 +100,10 @@ If the problem persists, open an issue with the full error output, iOS version, 
 
 **[来新识，认识一下 →](https://hinexus.me)**
 
-## 关注我的公众号
+## 关注公众号 · 添加个人微信
 
-欢迎扫码关注我的微信公众号，一起交流技术与实践。
+欢迎扫码关注我的微信公众号，或添加个人微信，一起交流技术与实践。
 
-<img src="assets/wechat-official-account.png" alt="微信公众号关注二维码" width="280" />
+| 微信公众号 | 个人微信 · AloneMonkey |
+| :---: | :---: |
+| <img src="assets/wechat-official-account.png" alt="微信公众号关注二维码" width="280" /> | <img src="assets/wechat-personal.jpg" alt="AloneMonkey 个人微信二维码" width="280" /> |
