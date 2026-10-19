@@ -137,17 +137,59 @@ function getExportFunction(type, name, ret, args) {
 var NSSearchPathForDirectoriesInDomains = getExportFunction("f", "NSSearchPathForDirectoriesInDomains", "pointer", ["int", "int", "int"]);
 var wrapper_open = getExportFunction("f", "open", "int", ["pointer", "int", "...", "int"]);
 var nativeRead = getExportFunction("f", "read", "long", ["int", "pointer", "ulong"]);
-var write = getExportFunction("f", "write", "long", ["int", "pointer", "ulong"]);
-var lseek = getExportFunction("f", "lseek", "int64", ["int", "int64", "int"]);
+var nativeWrite = getExportFunction("f", "write", "long", ["int", "pointer", "ulong"]);
+var nativeSeek = getExportFunction("f", "lseek", "int64", ["int", "int64", "int"]);
+var nativeErrno = getExportFunction("f", "__error", "pointer", []);
 var close = getExportFunction("f", "close", "int", ["int"]);
 var remove = getExportFunction("f", "remove", "int", ["pointer"]);
 var access = getExportFunction("f", "access", "int", ["pointer", "int"]);
 var dlopen = getExportFunction("f", "dlopen", "pointer", ["pointer", "int"]);
 
 function read(fd, buffer, size) {
-    var result = nativeRead(fd, buffer, size);
-    // ssize_t is an Int64 on arm64; buffer lengths passed to write() are numbers.
-    return typeof result === "number" ? result : result.toNumber();
+    while (true) {
+        var result = nativeRead(fd, buffer, size);
+        result = typeof result === "number" ? result : result.toNumber();
+        if (result >= 0) return result;
+        var error = nativeErrno().readS32();
+        if (error === 4) continue; // EINTR on Darwin
+        throw new Error("read failed (fd=" + fd + ", errno=" + error + ")");
+    }
+}
+
+function readExact(fd, buffer, size) {
+    var offset = 0;
+    while (offset < size) {
+        var count = read(fd, buffer.add(offset), size - offset);
+        if (count === 0) {
+            throw new Error("Unexpected EOF (fd=" + fd + ", read=" + offset + "/" + size + ")");
+        }
+        offset += count;
+    }
+}
+
+function writeAll(fd, buffer, size) {
+    var offset = 0;
+    while (offset < size) {
+        var result = nativeWrite(fd, buffer.add(offset), size - offset);
+        var count = typeof result === "number" ? result : result.toNumber();
+        if (count < 0) {
+            var error = nativeErrno().readS32();
+            if (error === 4) continue;
+            throw new Error("write failed (fd=" + fd + ", errno=" + error + ")");
+        }
+        if (count === 0) throw new Error("write made no progress (fd=" + fd + ")");
+        offset += count;
+    }
+}
+
+function lseek(fd, offset, whence) {
+    var result = nativeSeek(fd, offset, whence);
+    var position = typeof result === "number" ? result : result.toNumber();
+    if (position < 0) {
+        throw new Error("lseek failed (fd=" + fd + ", errno=" + nativeErrno().readS32() + ")");
+    }
+    if (!Number.isSafeInteger(position)) throw new Error("File offset exceeds safe integer range");
+    return position;
 }
 
 function getDocumentDir() {
@@ -201,14 +243,14 @@ function swap32(value) {
     return parseInt(result,16)
 }
 
-function dumpModule(name) {
+function dumpModule(name, dumpId) {
     if (modules == null) {
         modules = getAllAppModules();
     }
 
     var targetmod = null;
     for (var i = 0; i < modules.length; i++) {
-        if (modules[i].path.indexOf(name) != -1) {
+        if (modules[i].path === name) {
             targetmod = modules[i];
             break;
         }
@@ -218,8 +260,7 @@ function dumpModule(name) {
     }
     var modbase = modules[i].base;
     var modsize = modules[i].size;
-    var newmodname = modules[i].name;
-    var newmodpath = getDocumentDir() + "/" + newmodname + ".fid";
+    var newmodpath = getDocumentDir() + "/frida-ios-dump-" + dumpId + ".fid";
     var oldmodpath = modules[i].path;
 
 
@@ -248,19 +289,26 @@ function dumpModule(name) {
         }else if (magic == MH_MAGIC_64 || magic == MH_CIGAM_64) {
             is64bit = true;
             size_of_mach_header = 32;
+        }else{
+            throw new Error("Unsupported Mach-O header");
         }
 
         var BUFSIZE = 64 * 1024;
         var buffer = malloc(BUFSIZE);
 
-        read(foldmodule, buffer, BUFSIZE);
+        readExact(foldmodule, buffer, 8);
 
         var fileoffset = 0;
         var filesize = 0;
         magic = getU32(buffer);
         if(magic == FAT_CIGAM || magic == FAT_MAGIC){
             var off = 4;
-            var archs = swap32(getU32(buffer.add(off)));
+            var archs = swap32(getU32(buffer.add(4)));
+            if (archs > Math.floor((BUFSIZE - 8) / 20)) {
+                throw new Error("FAT architecture table exceeds buffer size");
+            }
+            lseek(foldmodule, 0, SEEK_SET);
+            readExact(foldmodule, buffer, 8 + archs * 20);
             for (var i = 0; i < archs; i++) {
                 var cputype = swap32(getU32(buffer.add(off + 4)));
                 var cpusubtype = swap32(getU32(buffer.add(off + 8)));
@@ -276,23 +324,17 @@ function dumpModule(name) {
                 throw new Error("Cannot find matching architecture in " + oldmodpath);
             }
 
-            lseek(fmodule, 0, SEEK_SET);
-            lseek(foldmodule, fileoffset, SEEK_SET);
-            for(var i = 0; i < parseInt(filesize / BUFSIZE); i++) {
-                read(foldmodule, buffer, BUFSIZE);
-                write(fmodule, buffer, BUFSIZE);
-            }
-            if(filesize % BUFSIZE){
-                read(foldmodule, buffer, filesize % BUFSIZE);
-                write(fmodule, buffer, filesize % BUFSIZE);
-            }
         }else{
-            var readLen = 0;
-            lseek(foldmodule, 0, SEEK_SET);
-            lseek(fmodule, 0, SEEK_SET);
-            while ((readLen = read(foldmodule, buffer, BUFSIZE)) > 0) {
-                write(fmodule, buffer, readLen);
-            }
+            filesize = lseek(foldmodule, 0, SEEK_END);
+        }
+        lseek(foldmodule, fileoffset, SEEK_SET);
+        lseek(fmodule, 0, SEEK_SET);
+        var remaining = filesize;
+        while (remaining > 0) {
+            var chunk = Math.min(remaining, BUFSIZE);
+            readExact(foldmodule, buffer, chunk);
+            writeAll(fmodule, buffer, chunk);
+            remaining -= chunk;
         }
 
         var ncmds = getU32(modbase.add(16));
@@ -313,18 +355,21 @@ function dumpModule(name) {
         }
 
         if (offset_cryptid != -1) {
+            if (crypt_off > filesize || crypt_size > filesize - crypt_off) {
+                throw new Error("Encrypted region exceeds module file size");
+            }
+            lseek(fmodule, crypt_off, SEEK_SET);
+            writeAll(fmodule, modbase.add(crypt_off), crypt_size);
+            // Mark the module decrypted only after its decrypted bytes were written.
             var tpbuf = malloc(8);
             putU64(tpbuf, 0);
             lseek(fmodule, offset_cryptid, SEEK_SET);
-            write(fmodule, tpbuf, 4);
-            lseek(fmodule, crypt_off, SEEK_SET);
-            write(fmodule, modbase.add(crypt_off), crypt_size);
+            writeAll(fmodule, tpbuf, 4);
         }
 
-        if (readLen < 0) {
-            throw new Error("Cannot read module: " + oldmodpath);
-        }
         return newmodpath
+    } catch (error) {
+        throw new Error("Cannot dump " + oldmodpath + ": " + error.message);
     } finally {
         close(fmodule);
         close(foldmodule);
@@ -389,6 +434,7 @@ function loadAllDynamicLibrary(app_path) {
 }
 
 function handleMessage(message) {
+    var taskId = ObjC.classes.NSUUID.UUID().UUIDString().toString();
     modules = getAllAppModules();
     var app_path = ObjC.classes.NSBundle.mainBundle().bundlePath();
     loadAllDynamicLibrary(app_path);
@@ -396,7 +442,7 @@ function handleMessage(message) {
     modules = getAllAppModules();
     for (var i = 0; i  < modules.length; i++) {
         console.log("start dump " + modules[i].path);
-        var result = dumpModule(modules[i].path);
+        var result = dumpModule(modules[i].path, taskId + "-" + i);
         send({ dump: result, path: modules[i].path});
     }
     send({app: app_path.toString()});

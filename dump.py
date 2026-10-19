@@ -22,6 +22,7 @@ import queue
 import stat
 import posixpath
 import time
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
 script_dir = os.path.dirname(os.path.realpath(__file__))
@@ -115,7 +116,11 @@ def resolve_ssh_options(args, config_path=None):
     port = int(args.ssh_port or config.get('port', Port))
     identity = args.ssh_key_filename or config.get('identityfile') or KeyFileName
     password = args.ssh_password if args.ssh_password is not None else Password
-    use_usb = not args.ssh_host or (hostname in ('localhost', '127.0.0.1', '::1') and port == 22)
+    transport = getattr(args, 'ssh_transport', 'auto')
+    if transport == 'auto':
+        use_usb = not args.ssh_host or hostname.lower() in ('localhost', '127.0.0.1', '::1')
+    else:
+        use_usb = transport == 'usb'
     return dict(host=hostname, port=port, username=args.ssh_user or config.get('user', User),
                 password=password, key_filename=identity,
                 use_usb=use_usb)
@@ -150,8 +155,19 @@ def generate_ipa(path, display_name):
             shutil.move(from_dir, to_dir)
 
     target_dir = './' + PAYLOAD_DIR
-    zip_args = ('zip', '-qry', os.path.join(os.getcwd(), ipa_filename), target_dir)
-    subprocess.check_call(zip_args, cwd=TEMP_DIR)
+    output_path = os.path.abspath(ipa_filename)
+    # Build a fresh archive on the destination filesystem before replacing it.
+    # Updating an existing ZIP leaves entries that disappeared from the app.
+    with tempfile.TemporaryDirectory(prefix='.frida-ios-dump-',
+                                     dir=os.path.dirname(output_path)) as archive_dir:
+        archive_path = os.path.join(archive_dir, 'export.ipa')
+        zip_args = ('zip', '-qry', archive_path, target_dir)
+        subprocess.check_call(zip_args, cwd=TEMP_DIR)
+        with zipfile.ZipFile(archive_path) as archive:
+            bad_entry = archive.testzip()
+            if bad_entry is not None:
+                raise RuntimeError('Corrupt IPA entry: {}'.format(bad_entry))
+        os.replace(archive_path, output_path)
     shutil.rmtree(PAYLOAD_PATH)
 
 
@@ -331,6 +347,21 @@ def handle_payload(payload):
 
             index = origin_path.find('.app/')
             file_dict[os.path.basename(dump_path)] = origin_path[index + 5:]
+            # Unique task filenames must not accumulate after successful downloads.
+            if re.fullmatch(r'frida-ios-dump-[A-Za-z0-9-]+\.fid', posixpath.basename(dump_path)):
+                cleanup_sftp = None
+                try:
+                    cleanup_sftp = ssh.open_sftp()
+                    cleanup_sftp.get_channel().settimeout(60)
+                    cleanup_sftp.remove(dump_path)
+                except Exception as error:
+                    tqdm.write('Could not remove temporary dump {}: {}'.format(dump_path, error))
+                finally:
+                    if cleanup_sftp is not None:
+                        try:
+                            cleanup_sftp.close()
+                        except Exception:
+                            pass
 
         if 'app' in payload:
             app_path = payload['app']
@@ -573,6 +604,8 @@ if __name__ == '__main__':
     parser.add_argument('-o', '--output', dest='output_ipa', help='Specify name of the decrypted IPA')
     parser.add_argument('-H', '--host', dest='ssh_host', help='SSH hostname or alias from ~/.ssh/config')
     parser.add_argument('-p', '--port', dest='ssh_port', help='Specify SSH port')
+    parser.add_argument('--ssh-transport', choices=('auto', 'usb', 'tcp'), default='auto',
+                        help='SSH transport: auto uses USB for localhost and TCP for remote hosts')
     parser.add_argument('-u', '--user', dest='ssh_user', help='Specify SSH username')
     parser.add_argument('-P', '--password', dest='ssh_password', help='Specify SSH password')
     parser.add_argument('-K', '--key_filename', dest='ssh_key_filename', help='Specify SSH private key file path')
@@ -583,6 +616,7 @@ if __name__ == '__main__':
     exit_code = 0
     ssh = None
     usb_ssh = None
+    workspace = None
 
     if not len(sys.argv[1:]):
         parser.print_help()
@@ -602,6 +636,9 @@ if __name__ == '__main__':
         name_or_bundleid = args.target
         output_ipa = args.output_ipa
         try:
+            workspace = tempfile.TemporaryDirectory(prefix='frida-ios-dump-', dir=TEMP_DIR)
+            TEMP_DIR = workspace.name
+            PAYLOAD_PATH = os.path.join(TEMP_DIR, PAYLOAD_DIR)
             ssh_options = resolve_ssh_options(args)
             ssh = paramiko.SSHClient()
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -630,12 +667,15 @@ if __name__ == '__main__':
             traceback.print_exc()
             exit_code = 1
 
-    if ssh:
-        ssh.close()
-    if usb_ssh:
-        usb_ssh.close()
-
-    if os.path.exists(PAYLOAD_PATH):
-        shutil.rmtree(PAYLOAD_PATH)
+    try:
+        if ssh:
+            ssh.close()
+    finally:
+        try:
+            if usb_ssh:
+                usb_ssh.close()
+        finally:
+            if workspace is not None:
+                workspace.cleanup()
 
     sys.exit(exit_code)

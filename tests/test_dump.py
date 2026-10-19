@@ -11,6 +11,11 @@ import os
 import shutil
 import stat
 import io
+import subprocess
+import runpy
+import sys
+from contextlib import redirect_stdout, redirect_stderr
+from concurrent.futures import ThreadPoolExecutor
 
 import dump
 
@@ -345,9 +350,47 @@ class DumpTests(unittest.TestCase):
             options = dump.resolve_ssh_options(args, str(config))
             self.assertEqual(options['username'], 'other')
             self.assertEqual(options['port'], 2200)
-            self.assertFalse(options['use_usb'])
+            self.assertTrue(options['use_usb'])
             args.ssh_password = 'explicit-password'
             self.assertEqual(dump.resolve_ssh_options(args, str(config))['password'], 'explicit-password')
+
+    def test_ssh_transport_selection_is_independent_of_device_port(self):
+        cases = [
+            (None, 'auto', True),
+            ('localhost', 'auto', True),
+            ('127.0.0.1', 'auto', True),
+            ('::1', 'auto', True),
+            ('192.0.2.1', 'auto', False),
+            ('device.example', 'auto', False),
+            ('127.0.0.1', 'tcp', False),
+            (None, 'tcp', False),
+            ('device.example', 'usb', True),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / 'config'
+            config.write_text('')
+            for host, transport, expected_usb in cases:
+                with self.subTest(host=host, transport=transport):
+                    args = argparse.Namespace(ssh_host=host, ssh_port='44', ssh_user=None,
+                                              ssh_password=None, ssh_key_filename=None,
+                                              ssh_transport=transport)
+                    options = dump.resolve_ssh_options(args, str(config))
+                    self.assertEqual(options['use_usb'], expected_usb)
+                    self.assertEqual(options['port'], 44)
+
+    def test_port_44_alias_opens_usb_forwarder_to_device_port(self):
+        args = argparse.Namespace(ssh_host='iphone', ssh_port=None, ssh_user=None,
+                                  ssh_password=None, ssh_key_filename=None, ssh_transport='auto')
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / 'config'
+            config.write_text('Host iphone\n HostName 127.0.0.1\n Port 44\n User mobile\n')
+            options = dump.resolve_ssh_options(args, str(config))
+            ssh, device = Mock(), Mock()
+            with patch.object(dump, 'USBSSHForwarder') as forwarder:
+                result = dump.connect_ssh(ssh, device, **options)
+            forwarder.assert_called_once_with(device, port=44)
+            self.assertIs(ssh.connect.call_args.kwargs['sock'], result.socket)
+            self.assertEqual(ssh.connect.call_args.kwargs['port'], 44)
 
     def test_usb_connects_without_attempting_local_tcp(self):
         ssh = Mock()
@@ -414,6 +457,56 @@ class DumpTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'npm install'):
                 dump.load_js_file(Mock(), dump.DUMP_JS)
 
+    def test_listing_apps_does_not_remove_another_export(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            other_payload = Path(temporary) / 'Payload'
+            other_payload.mkdir()
+            sentinel = other_payload / 'active-download.fid'
+            sentinel.write_bytes(b'other export')
+            device = Mock()
+            device.enumerate_applications.return_value = []
+            with patch.object(dump.tempfile, 'gettempdir', return_value=temporary), \
+                    patch.object(dump.frida, 'get_usb_device', return_value=device), \
+                    patch.object(sys, 'argv', ['dump.py', '-l']), \
+                    redirect_stdout(io.StringIO()):
+                with self.assertRaises(SystemExit) as result:
+                    runpy.run_path(dump.__file__, run_name='__main__')
+            self.assertEqual(result.exception.code, 0)
+            self.assertEqual(sentinel.read_bytes(), b'other export')
+
+    def test_failed_exports_use_distinct_workspaces_and_clean_only_their_own(self):
+        constructor = tempfile.TemporaryDirectory
+        workspaces = []
+
+        def create_workspace(*args, **kwargs):
+            workspace = constructor(*args, **kwargs)
+            workspaces.append(Path(workspace.name))
+            return workspace
+
+        with constructor() as temporary:
+            other_payload = Path(temporary) / 'Payload'
+            other_payload.mkdir()
+            sentinel = other_payload / 'active-download.fid'
+            sentinel.write_bytes(b'other export')
+            ssh = Mock()
+            ssh.connect.side_effect = paramiko.AuthenticationException('test authentication failure')
+            with patch.object(dump.tempfile, 'gettempdir', return_value=temporary), \
+                    patch.object(dump.tempfile, 'TemporaryDirectory', side_effect=create_workspace), \
+                    patch.object(dump.frida, 'get_usb_device', return_value=Mock()), \
+                    patch.object(dump.paramiko, 'SSHClient', return_value=ssh), \
+                    patch.object(sys, 'argv', ['dump.py', '-H', '192.0.2.1', 'example.app']), \
+                    redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                for _ in range(2):
+                    with self.assertRaises(SystemExit) as result:
+                        runpy.run_path(dump.__file__, run_name='__main__')
+                    self.assertEqual(result.exception.code, 1)
+            self.assertEqual(len(workspaces), 2)
+            self.assertNotEqual(workspaces[0], workspaces[1])
+            self.assertTrue(all(path.parent == Path(temporary) for path in workspaces))
+            self.assertTrue(all(not path.exists() for path in workspaces))
+            self.assertEqual(sentinel.read_bytes(), b'other export')
+            self.assertEqual(ssh.close.call_count, 2)
+
     def test_ipa_contains_replaced_binary(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -433,6 +526,113 @@ class DumpTests(unittest.TestCase):
                 self.assertEqual(archive.read(link), b'Frameworks/Example')
                 self.assertIsNone(archive.testzip())
             self.assertFalse(payload.exists())
+
+    def test_parallel_same_name_modules_replace_the_correct_bundle_paths(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            payload = root / 'Payload'
+            app = payload / 'Example.app'
+            (app / 'First').mkdir(parents=True)
+            (app / 'Second').mkdir()
+            (app / 'First' / 'Shared').write_bytes(b'encrypted first')
+            (app / 'Second' / 'Shared').write_bytes(b'encrypted second')
+            entries = [
+                {'dump': '/Documents/frida-ios-dump-task-0.fid',
+                 'path': '/Example.app/First/Shared'},
+                {'dump': '/Documents/frida-ios-dump-task-1.fid',
+                 'path': '/Example.app/Second/Shared'},
+            ]
+            content = {entries[0]['dump']: b'decrypted first',
+                       entries[1]['dump']: b'decrypted second'}
+            both_started = threading.Barrier(2)
+
+            def download(remote, destination):
+                both_started.wait(timeout=2)
+                (Path(destination) / Path(remote).name).write_bytes(content[remote])
+
+            def scp_client(*args, **kwargs):
+                client = Mock()
+                client.__enter__ = Mock(return_value=client)
+                client.__exit__ = Mock(return_value=False)
+                client.get.side_effect = download
+                return client
+
+            dump.file_dict['app'] = 'Example.app'
+            ssh = Mock()
+            with patch.object(dump, 'TEMP_DIR', temporary), \
+                    patch.object(dump, 'PAYLOAD_PATH', str(payload)), \
+                    patch.object(dump, 'ssh', ssh, create=True), \
+                    patch.object(dump, 'SCPClient', side_effect=scp_client), \
+                    patch.object(dump, 'tqdm', return_value=Mock()):
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    list(executor.map(dump.handle_payload, entries))
+                self.assertEqual(dump.file_dict['frida-ios-dump-task-0.fid'], 'First/Shared')
+                self.assertEqual(dump.file_dict['frida-ios-dump-task-1.fid'], 'Second/Shared')
+                dump.generate_ipa(str(payload), str(root / 'output'))
+            removed = [call.args[0] for call in ssh.open_sftp.return_value.remove.call_args_list]
+            self.assertCountEqual(removed, list(content))
+            self.assertEqual(ssh.open_sftp.return_value.close.call_count, 2)
+            with zipfile.ZipFile(root / 'output.ipa') as archive:
+                self.assertEqual(archive.read('Payload/Example.app/First/Shared'), content[entries[0]['dump']])
+                self.assertEqual(archive.read('Payload/Example.app/Second/Shared'), content[entries[1]['dump']])
+                self.assertIsNone(archive.testzip())
+
+    def test_repeated_export_removes_obsolete_archive_entries(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            payload = root / 'Payload'
+            app = payload / 'Example.app'
+            output = root / 'output.ipa'
+            dump.file_dict['app'] = 'Example.app'
+            with patch.object(dump, 'TEMP_DIR', temporary), \
+                    patch.object(dump, 'PAYLOAD_PATH', str(payload)):
+                app.mkdir(parents=True)
+                (app / 'removed.txt').write_text('old resource')
+                (app / 'Main').write_bytes(b'old executable')
+                dump.generate_ipa(str(payload), str(root / 'output'))
+                app.mkdir(parents=True)
+                (app / 'current.txt').write_text('new resource')
+                (app / 'Main').write_bytes(b'new executable')
+                dump.generate_ipa(str(payload), str(root / 'output'))
+            with zipfile.ZipFile(output) as archive:
+                self.assertNotIn('Payload/Example.app/removed.txt', archive.namelist())
+                self.assertEqual(archive.read('Payload/Example.app/current.txt'), b'new resource')
+                self.assertEqual(archive.read('Payload/Example.app/Main'), b'new executable')
+                self.assertIsNone(archive.testzip())
+            self.assertEqual(list(root.glob('.frida-ios-dump-*')), [])
+
+    def test_packaging_failure_preserves_existing_ipa(self):
+        def fail_packaging(args, **kwargs):
+            Path(args[2]).write_bytes(b'partial archive')
+            raise subprocess.CalledProcessError(1, args)
+
+        self.assert_failed_packaging_preserves_output(
+            fail_packaging, subprocess.CalledProcessError)
+
+    def test_invalid_archive_preserves_existing_ipa(self):
+        def invalid_archive(args, **kwargs):
+            Path(args[2]).write_bytes(b'invalid archive')
+
+        self.assert_failed_packaging_preserves_output(invalid_archive, zipfile.BadZipFile)
+
+    def assert_failed_packaging_preserves_output(self, package, expected_error):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            payload = root / 'Payload'
+            (payload / 'Example.app').mkdir(parents=True)
+            output = root / 'output.ipa'
+            with zipfile.ZipFile(output, 'w') as archive:
+                archive.writestr('original.txt', b'original export')
+            original = output.read_bytes()
+            dump.file_dict['app'] = 'Example.app'
+            with patch.object(dump, 'TEMP_DIR', temporary), \
+                    patch.object(dump, 'PAYLOAD_PATH', str(payload)), \
+                    patch.object(dump.subprocess, 'check_call', side_effect=package):
+                with self.assertRaises(expected_error):
+                    dump.generate_ipa(str(payload), str(root / 'output'))
+            self.assertEqual(output.read_bytes(), original)
+            self.assertTrue(payload.exists())
+            self.assertEqual(list(root.glob('.frida-ios-dump-*')), [])
 
 
 if __name__ == '__main__':

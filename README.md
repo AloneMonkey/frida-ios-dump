@@ -20,7 +20,7 @@ Give your AI tool the link to [SKILL.md](SKILL.md) and ask it to follow the inst
 
     Alternatively, `pnpm install --frozen-lockfile` installs the bridge using the included lockfile.
 
- 3. Connect the unlocked device over USB and ensure its SSH service is running. The script connects directly to device SSH port 22 through Frida's USB channel. No local port forwarding or `iproxy` is required. `-p` selects the device SSH port. An explicit remote hostname/IP uses TCP; a localhost alias on port 22 uses USB.
+ 3. Connect the unlocked device over USB and ensure its SSH service is running. The script connects directly to device SSH port 22 through Frida's USB channel. No local port forwarding or `iproxy` is required. `-p` selects the device SSH port, for example `-p 44` for a service listening on port 44. A localhost hostname or alias uses USB regardless of its port; a remote hostname/IP uses TCP. Use `--ssh-transport usb` or `--ssh-transport tcp` to select the transport explicitly.
  4. Run `python dump.py 'Display name'` or `python dump.py Bundle.identifier`. Use `python dump.py -l` to list installed apps.
 
 The agent explicitly imports `frida-objc-bridge`, and `dump.py` bundles it with `frida.Compiler` before injection. This is required because Frida 17 no longer includes the Objective-C bridge in scripts loaded through the Python API. No separate agent build command is needed. See the official [bridge documentation](https://frida.re/docs/bridges/) and [Frida 17 migration notes](https://frida.re/news/2025/05/17/frida-17-0-0-released/).
@@ -42,6 +42,8 @@ Host iphone
 ```
 
 Then run `./dump.py -H iphone Bundle.identifier`. The USB transport is provided by `dump.py`; this alias alone does not establish a USB connection for the system `ssh` command.
+
+If device SSH listens on port 44, change the alias to `Port 44` or pass `-p 44`. To connect to an existing local TCP forwarding service instead, pass `--ssh-transport tcp`.
 
 ```
 ./dump.py Aftenposten
