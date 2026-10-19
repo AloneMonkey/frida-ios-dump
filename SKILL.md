@@ -12,7 +12,7 @@ description: 自动安装和配置 AloneMonkey/frida-ios-dump，连接 USB 越�
 ## 1. 确定环境与任务
 
 - 优先复用用户已提供的工作目录、设备、SSH 别名、账号、密钥和应用名称。只询问仍缺少的信息；可以先获取仓库、检查运行时和 SSH 配置，不要为可自动发现的信息中断工作。
-- 主机需要 Python 3.10+、Node.js/npm（或 pnpm）、Git 和 `zip`。优先使用现有运行时和项目虚拟环境；缺少工具时用适合当前系统的包管理器补齐，不执行来历不明的远程安装脚本。
+- 主机需要 Python 3.10+、Node.js/npm（或 pnpm）和 Git。打包使用 Python 标准库，不需要外部 `zip`、`chmod` 或 `tar`。优先使用现有运行时和项目虚拟环境；缺少工具时用适合当前系统的包管理器补齐，不执行来历不明的远程安装脚本。
 - 设备需要已越狱、运行 frida-server 和 SSH 服务，通过 USB 连接并信任主机。解锁、确认信任等物理操作需要用户完成；本工作流不负责越狱。
 - 导出前明确目标应用，优先使用枚举得到的 Bundle ID。未指定目标时先列出应用供用户选择。
 
@@ -41,6 +41,8 @@ python3 -m venv .venv
 npm install
 ./.venv/bin/python dump.py --help
 ```
+
+Windows PowerShell 使用 `python -m venv .venv` 创建环境；将本文件后续命令中的 `./.venv/bin/python` 替换为 `.\.venv\Scripts\python.exe`，不要执行 Unix 的激活脚本或直接运行 `./dump.py`。符号链接和 iOS 文件权限会记录后直接写入 IPA，不需要在 Windows 本地创建链接或设置只读权限。该路径已完成模拟测试，完整 Windows 真机流程尚未实测。
 
 已安装 pnpm 时可用 `pnpm install --frozen-lockfile` 替代 `npm install`。仓库没有 npm 的 lockfile，不使用 `npm ci`。后续命令均使用虚拟环境中的 Python，无需依赖跨工具调用保留 shell 激活状态。
 

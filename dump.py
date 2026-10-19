@@ -11,7 +11,6 @@ import os
 import shutil
 import argparse
 import tempfile
-import subprocess
 import re
 import paramiko
 from scp import SCPClient
@@ -39,6 +38,8 @@ TEMP_DIR = tempfile.gettempdir()
 PAYLOAD_DIR = 'Payload'
 PAYLOAD_PATH = os.path.join(TEMP_DIR, PAYLOAD_DIR)
 file_dict = {}
+bundle_metadata = {}
+IS_WINDOWS = sys.platform == 'win32'
 
 finished = threading.Event()
 dump_error = None
@@ -142,6 +143,50 @@ def connect_ssh(ssh, device, host, port, username, password, key_filename, use_u
     return forwarder
 
 
+def write_ipa(payload_path, archive_path):
+    """Package files and Unix symlinks without external ZIP tools."""
+    written = set()
+
+    def add_link(archive, name, mode, target):
+        info = zipfile.ZipInfo(name)
+        info.create_system = 3
+        info.external_attr = mode << 16
+        archive.writestr(info, os.fsencode(target))
+        written.add(name)
+
+    def add(archive, local_path, archive_name):
+        metadata = os.lstat(local_path)
+        saved = bundle_metadata.get(archive_name, {})
+        mode = saved.get('mode', metadata.st_mode)
+        if stat.S_ISLNK(mode):
+            add_link(archive, archive_name, mode,
+                     saved['link'] if 'link' in saved else os.readlink(local_path))
+        elif stat.S_ISDIR(mode):
+            info = zipfile.ZipInfo.from_file(local_path, archive_name, strict_timestamps=False)
+            info.create_system = 3
+            info.external_attr = (mode << 16) | 0x10
+            archive.writestr(info, b'')
+            with os.scandir(local_path) as entries:
+                for entry in entries:
+                    add(archive, entry.path, archive_name + '/' + entry.name)
+        elif stat.S_ISREG(mode):
+            info = zipfile.ZipInfo.from_file(local_path, archive_name, strict_timestamps=False)
+            info.create_system = 3
+            info.external_attr = mode << 16
+            info.compress_type = zipfile.ZIP_DEFLATED
+            with open(local_path, 'rb') as source, archive.open(info, 'w') as destination:
+                shutil.copyfileobj(source, destination, length=1024 * 1024)
+        else:
+            raise RuntimeError('Unsupported file in app bundle: {}'.format(local_path))
+
+    with zipfile.ZipFile(archive_path, 'w', allowZip64=True) as archive:
+        add(archive, payload_path, PAYLOAD_DIR)
+        # Windows downloads record symlinks without creating privileged NTFS links.
+        for name, metadata in bundle_metadata.items():
+            if 'link' in metadata and name not in written:
+                add_link(archive, name, metadata['mode'], metadata['link'])
+
+
 def generate_ipa(path, display_name):
     ipa_filename = display_name + '.ipa'
 
@@ -153,22 +198,23 @@ def generate_ipa(path, display_name):
         to_dir = os.path.join(path, app_name, value)
         if key != 'app':
             shutil.move(from_dir, to_dir)
+            bundle_metadata[posixpath.join(PAYLOAD_DIR, app_name, value)] = {
+                'mode': stat.S_IFREG | 0o755}
 
-    target_dir = './' + PAYLOAD_DIR
     output_path = os.path.abspath(ipa_filename)
     # Build a fresh archive on the destination filesystem before replacing it.
     # Updating an existing ZIP leaves entries that disappeared from the app.
     with tempfile.TemporaryDirectory(prefix='.frida-ios-dump-',
                                      dir=os.path.dirname(output_path)) as archive_dir:
         archive_path = os.path.join(archive_dir, 'export.ipa')
-        zip_args = ('zip', '-qry', archive_path, target_dir)
-        subprocess.check_call(zip_args, cwd=TEMP_DIR)
+        write_ipa(path, archive_path)
         with zipfile.ZipFile(archive_path) as archive:
             bad_entry = archive.testzip()
             if bad_entry is not None:
                 raise RuntimeError('Corrupt IPA entry: {}'.format(bad_entry))
         os.replace(archive_path, output_path)
     shutil.rmtree(PAYLOAD_PATH)
+    bundle_metadata.clear()
 
 
 def on_message(message, data):
@@ -206,6 +252,8 @@ def download_app(ssh_client, app_path, destination, excluded, progress, set_tota
     """Download bundle resources over SFTP, skipping already dumped binaries."""
     app_path = app_path.rstrip('/')
     local_app = os.path.join(destination, posixpath.basename(app_path))
+    archive_root = posixpath.join(PAYLOAD_DIR, posixpath.basename(app_path))
+    bundle_metadata[archive_root] = {'mode': stat.S_IFDIR | 0o755}
     excluded = set(excluded)
     sftp = ssh_client.open_sftp()
     futures = []
@@ -239,11 +287,15 @@ def download_app(ssh_client, app_path, destination, excluded, progress, set_tota
                 continue
             remote_path = posixpath.join(remote, entry.filename)
             local_path = os.path.join(local, entry.filename)
+            metadata = {'mode': entry.st_mode}
+            bundle_metadata[posixpath.join(archive_root, relative_path)] = metadata
             if stat.S_ISDIR(entry.st_mode):
                 copy_directory(remote_path, local_path, relative_path)
                 directories.append((local_path, stat.S_IMODE(entry.st_mode)))
             elif stat.S_ISLNK(entry.st_mode):
-                os.symlink(sftp.readlink(remote_path), local_path)
+                metadata['link'] = sftp.readlink(remote_path)
+                if not IS_WINDOWS:
+                    os.symlink(metadata['link'], local_path)
             elif stat.S_ISREG(entry.st_mode):
                 total_size += entry.st_size
                 future = executor.submit(copy_file, (remote_path, local_path, entry))
@@ -268,7 +320,8 @@ def download_app(ssh_client, app_path, destination, excluded, progress, set_tota
             last_sent[0] = sent
 
         worker_state.sftp.get(remote_path, local_path, callback=on_progress)
-        os.chmod(local_path, stat.S_IMODE(entry.st_mode))
+        if not IS_WINDOWS:
+            os.chmod(local_path, stat.S_IMODE(entry.st_mode))
         if entry.st_atime is not None and entry.st_mtime is not None:
             os.utime(local_path, (entry.st_atime, entry.st_mtime))
 
@@ -284,7 +337,8 @@ def download_app(ssh_client, app_path, destination, excluded, progress, set_tota
             future.result()
         # Apply read-only directory modes only after all children have been written.
         for local_path, mode in directories:
-            os.chmod(local_path, mode)
+            if not IS_WINDOWS:
+                os.chmod(local_path, mode)
     except BaseException as error:
         if isinstance(error, Exception):
             with progress_lock:
@@ -339,11 +393,7 @@ def handle_payload(payload):
                 scp.get(scp_from, scp_to)
 
             chmod_dir = os.path.join(PAYLOAD_PATH, os.path.basename(dump_path))
-            chmod_args = ('chmod', '655', chmod_dir)
-            try:
-                subprocess.check_call(chmod_args)
-            except subprocess.CalledProcessError as err:
-                print(err)
+            os.chmod(chmod_dir, 0o755)
 
             index = origin_path.find('.app/')
             file_dict[os.path.basename(dump_path)] = origin_path[index + 5:]
@@ -390,11 +440,7 @@ def handle_payload(payload):
                          set_total=finish_scan, scan_progress=scan_progress)
 
             chmod_dir = os.path.join(PAYLOAD_PATH, os.path.basename(app_path))
-            chmod_args = ('chmod', '755', chmod_dir)
-            try:
-                subprocess.check_call(chmod_args)
-            except subprocess.CalledProcessError as err:
-                print(err)
+            os.chmod(chmod_dir, 0o755)
 
             file_dict['app'] = os.path.basename(app_path)
 
@@ -536,6 +582,7 @@ def start_dump(session, ipa_name, ssh_client=None):
     print('Dumping {} to {}'.format(ipa_name, TEMP_DIR))
     finished.clear()
     file_dict.clear()
+    bundle_metadata.clear()
     dump_error = None
     message_queue = queue.Queue()
     if ssh_client is None:

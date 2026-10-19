@@ -20,6 +20,17 @@ Give your AI tool the link to [SKILL.md](SKILL.md) and ask it to follow the inst
 
     Alternatively, `pnpm install --frozen-lockfile` installs the bridge using the included lockfile.
 
+    On Windows (PowerShell), use:
+
+    ```powershell
+    python -m venv .venv
+    .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+    npm install
+    .\.venv\Scripts\python.exe dump.py -l
+    ```
+
+    IPA packaging uses Python's standard library; no external `zip`, `chmod`, or `tar` command is required. On Windows, device symlinks and Unix permissions are recorded and written directly into the IPA, without creating local symlinks or making downloaded files read-only. The full Windows/device workflow has not yet been tested on a Windows host.
+
  3. Connect the unlocked device over USB and ensure its SSH service is running. The script connects directly to device SSH port 22 through Frida's USB channel. No local port forwarding or `iproxy` is required. `-p` selects the device SSH port, for example `-p 44` for a service listening on port 44. A localhost hostname or alias uses USB regardless of its port; a remote hostname/IP uses TCP. Use `--ssh-transport usb` or `--ssh-transport tcp` to select the transport explicitly.
  4. Run `python dump.py 'Display name'` or `python dump.py Bundle.identifier`. Use `python dump.py -l` to list installed apps.
 

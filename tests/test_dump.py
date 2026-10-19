@@ -11,7 +11,6 @@ import os
 import shutil
 import stat
 import io
-import subprocess
 import runpy
 import sys
 from contextlib import redirect_stdout, redirect_stderr
@@ -25,7 +24,16 @@ class DumpTests(unittest.TestCase):
         dump.dump_error = None
         dump.finished.clear()
         dump.file_dict.clear()
+        dump.bundle_metadata.clear()
         dump.message_queue = queue.Queue()
+
+    def bundle_link(self, payload, relative, target, directory=False):
+        """Match the platform's downloaded-link representation without privileges."""
+        if dump.IS_WINDOWS:
+            dump.bundle_metadata['Payload/' + relative] = {
+                'mode': stat.S_IFLNK | 0o777, 'link': target}
+        else:
+            (payload / relative).symlink_to(target, target_is_directory=directory)
 
     def test_bundle_download_skips_exact_binary_paths_and_keeps_resources(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -41,7 +49,6 @@ class DumpTests(unittest.TestCase):
             (app / 'Resources' / 'Example').write_bytes(b'resource with same basename')
             (app / 'Resources' / 'helper').write_bytes(b'helper')
             (app / 'Resources' / 'helper').chmod(0o755)
-            (app / 'InfoLink').symlink_to('Info.plist')
             destination = root / 'Payload'
             def get(remote, local, callback):
                 shutil.copyfile(remote, local)
@@ -50,12 +57,22 @@ class DumpTests(unittest.TestCase):
 
             clients = []
 
+            def list_directory(path):
+                entries = [paramiko.SFTPAttributes.from_stat(entry.lstat(), entry.name)
+                           for entry in Path(path).iterdir()]
+                if Path(path) == app:
+                    link = paramiko.SFTPAttributes()
+                    link.filename, link.st_mode = 'InfoLink', stat.S_IFLNK | 0o777
+                    entries.append(link)
+                for entry in entries:
+                    if entry.filename == 'helper':
+                        entry.st_mode = stat.S_IFREG | 0o755
+                return entries
+
             def open_sftp():
                 client = Mock()
-                client.listdir_attr.side_effect = lambda path: [
-                    paramiko.SFTPAttributes.from_stat(entry.lstat(), entry.name)
-                    for entry in Path(path).iterdir()]
-                client.readlink.side_effect = os.readlink
+                client.listdir_attr.side_effect = list_directory
+                client.readlink.return_value = 'Info.plist'
                 client.get.side_effect = get
                 clients.append(client)
                 return client
@@ -65,7 +82,7 @@ class DumpTests(unittest.TestCase):
             received = []
             totals = []
             scanned = []
-            dump.download_app(ssh, str(app), str(destination),
+            dump.download_app(ssh, app.as_posix(), str(destination),
                               ['Example', 'Frameworks/Test.framework/Test'], received.append,
                               set_total=totals.append,
                               scan_progress=scanned.append)
@@ -77,11 +94,17 @@ class DumpTests(unittest.TestCase):
             self.assertTrue((copied_app / 'Frameworks' / 'Test.framework').is_dir())
             self.assertFalse((copied_app / 'Example').exists())
             self.assertFalse((copied_app / 'Frameworks' / 'Test.framework' / 'Test').exists())
-            self.assertEqual(os.readlink(copied_app / 'InfoLink'), 'Info.plist')
-            self.assertEqual(stat.S_IMODE((copied_app / 'Resources' / 'helper').stat().st_mode), 0o755)
+            if dump.IS_WINDOWS:
+                self.assertFalse(os.path.lexists(copied_app / 'InfoLink'))
+            else:
+                self.assertEqual(os.readlink(copied_app / 'InfoLink'), 'Info.plist')
+                self.assertEqual(stat.S_IMODE((copied_app / 'Resources' / 'helper').stat().st_mode), 0o755)
+            archive_root = 'Payload/' + app.name
+            self.assertEqual(dump.bundle_metadata[archive_root + '/InfoLink']['link'], 'Info.plist')
+            self.assertEqual(stat.S_IMODE(dump.bundle_metadata[archive_root + '/Resources/helper']['mode']), 0o755)
             self.assertEqual(sum(received), sum((app / name).stat().st_size for name in downloaded))
             self.assertEqual(totals, [sum(received)])
-            self.assertEqual(sum(scanned), len(list(app.rglob('*'))))
+            self.assertEqual(sum(scanned), len(list(app.rglob('*'))) + 1)
             self.assertLessEqual(len(clients), 5)
             for client in clients:
                 client.close.assert_called_once()
@@ -113,6 +136,69 @@ class DumpTests(unittest.TestCase):
             dump.download_app(ssh, '/Test.app', directory, [], received.append, set_total=totals.append)
         self.assertEqual(totals, [1])
         self.assertEqual(sum(received), 1)
+
+    def test_windows_download_packages_links_and_ios_modes_without_local_symlinks(self):
+        def entry(name, mode, size=0):
+            result = paramiko.SFTPAttributes()
+            result.filename, result.st_mode, result.st_size = name, mode, size
+            return result
+
+        tree = {
+            '/Test.app': [entry('Main', stat.S_IFREG | 0o755),
+                          entry('helper', stat.S_IFREG | 0o555, 4),
+                          entry('ReadOnly', stat.S_IFDIR | 0o555),
+                          entry('FileLink', stat.S_IFLNK | 0o777),
+                          entry('DirectoryLink', stat.S_IFLNK | 0o777),
+                          entry('DanglingLink', stat.S_IFLNK | 0o777)],
+            '/Test.app/ReadOnly': [entry('config', stat.S_IFREG | 0o444, 2)],
+        }
+        links = {'/Test.app/FileLink': 'helper', '/Test.app/DirectoryLink': 'ReadOnly',
+                 '/Test.app/DanglingLink': 'missing'}
+        contents = {'/Test.app/helper': b'help', '/Test.app/ReadOnly/config': b'{}'}
+
+        def download(remote, local, callback):
+            Path(local).write_bytes(contents[remote])
+            callback(len(contents[remote]), len(contents[remote]))
+
+        def open_sftp():
+            client = Mock()
+            client.listdir_attr.side_effect = lambda remote: tree[remote]
+            client.readlink.side_effect = lambda remote: links[remote]
+            client.get.side_effect = download
+            return client
+
+        ssh = Mock()
+        ssh.open_sftp.side_effect = open_sftp
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            payload = root / 'Payload'
+            payload.mkdir()
+            (payload / 'task.fid').write_bytes(b'decrypted executable')
+            with patch.object(dump, 'IS_WINDOWS', True), \
+                    patch.object(dump.os, 'symlink', side_effect=AssertionError('Requires privilege')), \
+                    patch.object(dump.os, 'chmod', side_effect=AssertionError('Must keep local files writable')):
+                dump.download_app(ssh, '/Test.app', str(payload), ['Main'], Mock())
+                for name in ('FileLink', 'DirectoryLink', 'DanglingLink'):
+                    self.assertFalse(os.path.lexists(payload / 'Test.app' / name))
+                dump.file_dict.update({'app': 'Test.app', 'task.fid': 'Main'})
+                with patch.object(dump, 'PAYLOAD_PATH', str(payload)):
+                    dump.generate_ipa(str(payload), str(root / 'output'))
+            self.assertFalse(payload.exists(), 'Read-only iOS modes must not prevent Windows cleanup')
+            with zipfile.ZipFile(root / 'output.ipa') as archive:
+                for name, mode in [('Main', 0o755), ('helper', 0o555), ('ReadOnly/config', 0o444)]:
+                    info = archive.getinfo('Payload/Test.app/' + name)
+                    self.assertEqual(info.create_system, 3)
+                    self.assertEqual(stat.S_IMODE(info.external_attr >> 16), mode)
+                directory = archive.getinfo('Payload/Test.app/ReadOnly/')
+                self.assertEqual(stat.S_IMODE(directory.external_attr >> 16), 0o555)
+                for name in ('FileLink', 'DirectoryLink', 'DanglingLink'):
+                    info = archive.getinfo('Payload/Test.app/' + name)
+                    self.assertTrue(stat.S_ISLNK(info.external_attr >> 16))
+                    self.assertEqual(archive.read(info), links['/Test.app/' + name].encode())
+                self.assertNotIn('Payload/Test.app/DirectoryLink/config', archive.namelist())
+                self.assertEqual(archive.read('Payload/Test.app/Main'), b'decrypted executable')
+                self.assertIsNone(archive.testzip())
+            self.assertEqual(dump.bundle_metadata, {})
 
     def test_bundle_download_failure_is_reported_and_sftp_closed(self):
         sftp = Mock()
@@ -152,7 +238,7 @@ class DumpTests(unittest.TestCase):
 
         with patch.object(dump, 'ssh', Mock(), create=True), \
                 patch.object(dump, 'download_app', side_effect=download), \
-                patch.object(dump.subprocess, 'check_call'), \
+                patch.object(dump.os, 'chmod'), \
                 patch.object(dump, 'tqdm', side_effect=lambda **kwargs: real_tqdm(file=output, **kwargs)):
             dump.handle_payload({'app': '/Test.app'})
         rendered = output.getvalue()
@@ -513,7 +599,7 @@ class DumpTests(unittest.TestCase):
             payload = root / 'Payload'
             (payload / 'Example.app' / 'Frameworks').mkdir(parents=True)
             (payload / 'Example.app' / 'Frameworks' / 'Example').write_bytes(b'encrypted')
-            (payload / 'Example.app' / 'BinaryLink').symlink_to('Frameworks/Example')
+            self.bundle_link(payload, 'Example.app/BinaryLink', 'Frameworks/Example')
             (payload / 'Example.fid').write_bytes(b'decrypted')
             dump.file_dict.update({'app': 'Example.app', 'Example.fid': 'Frameworks/Example'})
             with patch.object(dump, 'TEMP_DIR', temporary), \
@@ -575,7 +661,26 @@ class DumpTests(unittest.TestCase):
             with zipfile.ZipFile(root / 'output.ipa') as archive:
                 self.assertEqual(archive.read('Payload/Example.app/First/Shared'), content[entries[0]['dump']])
                 self.assertEqual(archive.read('Payload/Example.app/Second/Shared'), content[entries[1]['dump']])
+                for relative in ('First/Shared', 'Second/Shared'):
+                    mode = archive.getinfo('Payload/Example.app/' + relative).external_attr >> 16
+                    self.assertEqual(stat.S_IMODE(mode), 0o755)
                 self.assertIsNone(archive.testzip())
+
+    def test_dump_permission_failure_is_reported_without_recording_success(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            payload = {'dump': '/Documents/test.fid', 'path': '/Example.app/Main'}
+            client = Mock()
+            manager = Mock()
+            manager.__enter__ = Mock(return_value=client)
+            manager.__exit__ = Mock(return_value=False)
+            with patch.object(dump, 'PAYLOAD_PATH', temporary), \
+                    patch.object(dump, 'ssh', Mock(), create=True), \
+                    patch.object(dump, 'SCPClient', return_value=manager), \
+                    patch.object(dump, 'tqdm', return_value=Mock()), \
+                    patch.object(dump.os, 'chmod', side_effect=PermissionError('cannot set mode')):
+                with self.assertRaisesRegex(PermissionError, 'cannot set mode'):
+                    dump.handle_payload(payload)
+            self.assertNotIn('test.fid', dump.file_dict)
 
     def test_repeated_export_removes_obsolete_archive_entries(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -601,17 +706,44 @@ class DumpTests(unittest.TestCase):
                 self.assertIsNone(archive.testzip())
             self.assertEqual(list(root.glob('.frida-ios-dump-*')), [])
 
+    def test_packaging_without_external_tools_preserves_links_and_empty_directories(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            payload = root / 'Payload'
+            app = payload / 'Example.app'
+            (app / 'Resources' / 'Empty').mkdir(parents=True)
+            (app / 'Main').write_bytes(b'executable')
+            (app / 'Main').chmod(0o755)
+            (app / 'Resources' / '中文 file.txt').write_text('resource', encoding='utf-8')
+            self.bundle_link(payload, 'Example.app/Current', 'Resources', directory=True)
+            self.bundle_link(payload, 'Example.app/Missing', 'does-not-exist')
+            dump.file_dict['app'] = 'Example.app'
+            with patch.object(dump, 'PAYLOAD_PATH', str(payload)), \
+                    patch.dict(os.environ, {'PATH': ''}):
+                dump.generate_ipa(str(payload), str(root / 'output'))
+            with zipfile.ZipFile(root / 'output.ipa') as archive:
+                self.assertEqual(archive.read('Payload/Example.app/Main'), b'executable')
+                self.assertEqual(archive.read('Payload/Example.app/Resources/中文 file.txt'), b'resource')
+                self.assertIn('Payload/Example.app/Resources/Empty/', archive.namelist())
+                self.assertNotIn('Payload/Example.app/Current/中文 file.txt', archive.namelist())
+                for name, target in [('Current', b'Resources'), ('Missing', b'does-not-exist')]:
+                    info = archive.getinfo('Payload/Example.app/' + name)
+                    self.assertEqual(info.create_system, 3)
+                    self.assertTrue(stat.S_ISLNK(info.external_attr >> 16))
+                    self.assertEqual(archive.read(info), target)
+                self.assertIsNone(archive.testzip())
+
     def test_packaging_failure_preserves_existing_ipa(self):
-        def fail_packaging(args, **kwargs):
-            Path(args[2]).write_bytes(b'partial archive')
-            raise subprocess.CalledProcessError(1, args)
+        def fail_packaging(payload, archive_path):
+            Path(archive_path).write_bytes(b'partial archive')
+            raise OSError('disk full')
 
         self.assert_failed_packaging_preserves_output(
-            fail_packaging, subprocess.CalledProcessError)
+            fail_packaging, OSError)
 
     def test_invalid_archive_preserves_existing_ipa(self):
-        def invalid_archive(args, **kwargs):
-            Path(args[2]).write_bytes(b'invalid archive')
+        def invalid_archive(payload, archive_path):
+            Path(archive_path).write_bytes(b'invalid archive')
 
         self.assert_failed_packaging_preserves_output(invalid_archive, zipfile.BadZipFile)
 
@@ -627,7 +759,7 @@ class DumpTests(unittest.TestCase):
             dump.file_dict['app'] = 'Example.app'
             with patch.object(dump, 'TEMP_DIR', temporary), \
                     patch.object(dump, 'PAYLOAD_PATH', str(payload)), \
-                    patch.object(dump.subprocess, 'check_call', side_effect=package):
+                    patch.object(dump, 'write_ipa', side_effect=package):
                 with self.assertRaises(expected_error):
                     dump.generate_ipa(str(payload), str(root / 'output'))
             self.assertEqual(output.read_bytes(), original)
