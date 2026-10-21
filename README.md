@@ -132,6 +132,15 @@ Validated with Frida 17.23.3 on a jailbroken iPhone X running iOS 16.7.16: app e
 
 Run the host regression tests with `python -m unittest discover -s tests -v`.
 
+Run the agent regression tests with Node.js:
+
+```sh
+node tests/test_agent.js
+node tests/test_agent_io.js
+node tests/test_agent_scan.js
+node tests/test_agent_temp.js
+```
+
 
 ## Troubleshooting
 

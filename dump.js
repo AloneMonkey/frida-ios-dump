@@ -135,6 +135,7 @@ function getExportFunction(type, name, ret, args) {
 }
 
 var NSSearchPathForDirectoriesInDomains = getExportFunction("f", "NSSearchPathForDirectoriesInDomains", "pointer", ["int", "int", "int"]);
+var NSTemporaryDirectory = getExportFunction("f", "NSTemporaryDirectory", "pointer", []);
 var wrapper_open = getExportFunction("f", "open", "int", ["pointer", "int", "...", "int"]);
 var nativeRead = getExportFunction("f", "read", "long", ["int", "pointer", "ulong"]);
 var nativeWrite = getExportFunction("f", "write", "long", ["int", "pointer", "ulong"]);
@@ -193,10 +194,29 @@ function lseek(fd, offset, whence) {
 }
 
 function getDocumentDir() {
+    var manager = ObjC.classes.NSFileManager.defaultManager();
+    function isWritableDirectory(directory) {
+        var isDirectory = Memory.alloc(Process.pointerSize);
+        isDirectory.writeU8(0);
+        return manager.fileExistsAtPath_isDirectory_(directory, isDirectory) &&
+            isDirectory.readU8() !== 0 && manager.isWritableFileAtPath_(directory);
+    }
     var NSDocumentDirectory = 9;
     var NSUserDomainMask = 1;
     var npdirs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, 1);
-    return ObjC.Object(npdirs).objectAtIndex_(0).toString();
+    if (!npdirs.isNull()) {
+        var directories = ObjC.Object(npdirs);
+        if (directories.count() > 0) {
+            var documents = directories.objectAtIndex_(0);
+            if (isWritableDirectory(documents)) return documents.toString();
+        }
+    }
+    var temporary = NSTemporaryDirectory();
+    if (!temporary.isNull()) {
+        var directory = ObjC.Object(temporary);
+        if (isWritableDirectory(directory)) return directory.toString();
+    }
+    throw new Error("No writable directory for dump files: Documents and temporary directory are unavailable");
 }
 
 function open(pathname, flags, mode) {
@@ -376,14 +396,30 @@ function dumpModule(name, dumpId) {
     }
 }
 
-function loadAllDynamicLibrary(app_path) {
+function loadAllDynamicLibrary(app_path, bundle_root, visited) {
+    var resolved_path = app_path.stringByResolvingSymlinksInPath().toString();
+    bundle_root = bundle_root || resolved_path;
+    visited = visited || new Set();
+    if ((resolved_path !== bundle_root && !resolved_path.startsWith(bundle_root + "/")) ||
+            visited.has(resolved_path)) {
+        return;
+    }
+    visited.add(resolved_path);
     var defaultManager = ObjC.classes.NSFileManager.defaultManager();
     var errorPtr = Memory.alloc(Process.pointerSize);
     errorPtr.writePointer(NULL);
     var filenames = defaultManager.contentsOfDirectoryAtPath_error_(app_path, errorPtr);
+    if (filenames === null) {
+        throw new Error("Cannot scan app directory: " + app_path);
+    }
     for (var i = 0, l = filenames.count(); i < l; i++) {
         var file_name = filenames.objectAtIndex_(i);
         var file_path = app_path.stringByAppendingPathComponent_(file_name);
+        var resolved_file = file_path.stringByResolvingSymlinksInPath().toString();
+        // RootHide's .jbroot points outside the app. Keep internal framework links.
+        if (resolved_file !== bundle_root && !resolved_file.startsWith(bundle_root + "/")) {
+            continue;
+        }
         if (file_name.hasSuffix_(".framework")) {
             var bundle = ObjC.classes.NSBundle.bundleWithPath_(file_path);
             if (bundle.isLoaded()) {
@@ -408,7 +444,7 @@ function loadAllDynamicLibrary(app_path) {
             isDirPtr.writePointer(NULL);
             defaultManager.fileExistsAtPath_isDirectory_(file_path, isDirPtr);
             if (isDirPtr.readU8() !== 0) {
-                loadAllDynamicLibrary(file_path);
+                loadAllDynamicLibrary(file_path, bundle_root, visited);
             } else {
                 if (file_name.hasSuffix_(".dylib")) {
                     var is_loaded = 0;
