@@ -56,6 +56,45 @@ Then run `./dump.py -H iphone Bundle.identifier`. The USB transport is provided 
 
 If device SSH listens on port 44, change the alias to `Port 44` or pass `-p 44`. To connect to an existing local TCP forwarding service instead, pass `--ssh-transport tcp`.
 
+### Device selection and remote connections
+
+USB remains the default. When multiple devices are connected, use `frida-ls-devices` to find the device ID, then select it explicitly:
+
+```sh
+python dump.py --device-id DEVICE_ID -l
+python dump.py --device-id DEVICE_ID -H iphone Bundle.identifier
+```
+
+To connect without USB, the device's frida-server and SSH service must be reachable over the network. `--remote` selects the Frida endpoint (`HOST[:PORT]`, default port 27042); it is independent of the SSH endpoint:
+
+```sh
+python dump.py --remote 192.168.1.50:27042 -l
+python dump.py --remote 192.168.1.50:27042 -u mobile Bundle.identifier
+python dump.py --remote 192.168.1.50:27042 -H iphone-network Bundle.identifier
+```
+
+In remote mode, SSH defaults to TCP on the same host, port 22. Use `-H` for a different SSH host or alias and `-p` for its SSH port. For IPv6, use `--remote '[2001:db8::1]:27042'`. `--remote` and `--device-id` are mutually exclusive. A failed explicit connection never falls back to another device. Remote mode cannot be combined with `--ssh-transport usb`.
+
+If frida-server only listens on the device's loopback interface, use an SSH tunnel (where `iphone-network` is your SSH alias for the device's network address):
+
+```sh
+ssh -N -L 127.0.0.1:27043:127.0.0.1:27042 iphone-network
+# In another terminal:
+python dump.py --remote 127.0.0.1:27043 -H iphone-network Bundle.identifier
+```
+
+Remote mode omits agent source maps to reduce the script upload size. USB mode retains source maps for debugging.
+
+### Diagnostics and timeouts
+
+```sh
+python dump.py -v --agent-timeout 300 --transfer-timeout 180 -H iphone Bundle.identifier
+```
+
+`-v` / `--verbose` adds host stage diagnostics for device selection, SSH connection, app enumeration, spawn/attach, agent compilation/loading, downloads and packaging. Existing agent console output remains visible without `-v`. Credentials and private key contents are not included in the added diagnostics.
+
+`--agent-timeout` is the wait for the next queued agent message (default 120 seconds). `--transfer-timeout` is the SCP/SFTP I/O timeout (default 60 seconds); it also bounds SFTP channel creation and initialization, and applies to resource scanning, file transfers and device temporary-file cleanup. Both accept positive seconds. These are not total export limits and do not change Frida's spawn/attach or agent compilation/loading timeouts. The last verbose stage helps identify where startup stopped.
+
 ```
 ./dump.py Aftenposten
 Start the target app Aftenposten

@@ -14,6 +14,7 @@ description: 自动安装和配置 AloneMonkey/frida-ios-dump，连接 USB 越�
 - 优先复用用户已提供的工作目录、设备、SSH 别名、账号、密钥和应用名称。只询问仍缺少的信息；可以先获取仓库、检查运行时和 SSH 配置，不要为可自动发现的信息中断工作。
 - 主机需要 Python 3.10+、Node.js/npm（或 pnpm）和 Git。打包使用 Python 标准库，不需要外部 `zip`、`chmod` 或 `tar`。优先使用现有运行时和项目虚拟环境；缺少工具时用适合当前系统的包管理器补齐，不执行来历不明的远程安装脚本。
 - 设备需要已越狱、运行 frida-server 和 SSH 服务，通过 USB 连接并信任主机。解锁、确认信任等物理操作需要用户完成；本工作流不负责越狱。
+- 默认仍用 USB。用户指定远程设备时使用 `--remote HOST[:PORT]`，前提是设备的 Frida 和 SSH 服务均可从主机访问；不为此自动修改设备服务监听配置。
 - 导出前明确目标应用，优先使用枚举得到的 Bundle ID。未指定目标时先列出应用供用户选择。
 
 ## 2. 获取仓库
@@ -54,6 +55,10 @@ Frida 17 的 Objective-C bridge 由 npm/pnpm 安装，`dump.py` 会自动编译 
 ./.venv/bin/python dump.py -l
 ```
 
+多台 USB 设备时，先用 `frida-ls-devices` 找到用户指定设备的 ID，并在枚举和导出命令中都加 `--device-id DEVICE_ID`；虚拟环境工具可用 `./.venv/bin/frida-ls-devices`（Windows 为 `.\.venv\Scripts\frida-ls-devices.exe`）。用户指定远程连接时，枚举改为 `./.venv/bin/python dump.py --remote HOST:27042 -l`，后续导出也保留同一 `--remote`。这两个选项互斥，连接失败不得改用其他设备。
+
+如果设备 Frida 仅监听回环地址，可通过指向设备网络地址的 SSH 别名建立隧道：`ssh -N -L 127.0.0.1:27043:127.0.0.1:27042 iphone-network`，随后使用 `--remote 127.0.0.1:27043 -H iphone-network`；任务结束后关闭隧道。远程模式省略 agent source map 以减小上传体积，USB 模式保留。
+
 如果实际运行出现兼容性错误，再根据具体报错处理，不预先创建版本约束文件或调整设备服务。
 
 ## 4. 配置 SSH
@@ -88,11 +93,13 @@ Host iphone
 
 默认自动模式下，localhost/127.0.0.1/::1 主机或别名均使用 USB，端口表示设备 SSH 端口，不限于 22。例如设备服务监听 44 时，设置别名 `Port 44` 或传入 `-p 44`。显式远程主机名/IP 使用 TCP。可用 `--ssh-transport usb` 或 `--ssh-transport tcp` 显式选择；连接已有本机 TCP 转发服务时使用后者。USB 通道由 `dump.py` 提供，上面的别名本身不能让系统 `ssh iphone` 或 `ssh-copy-id iphone` 自动走 USB。密钥认证失败时仍可回退到默认密码或显式 `-P`。
 
+使用 `--remote` 时，SSH 默认通过 TCP 连接该 Frida 端点的主机、22 端口；`-H` 可单独指定 SSH 主机或别名，`-p` 仍只设置 SSH 端口，不设置 Frida 端口。远程模式即使 `-H` 指向 localhost 也使用 TCP，不与 `--ssh-transport usb` 组合。IPv6 Frida 端点使用 `[IPv6]:PORT`。
+
 ### 可选：用户要求免密登录时
 
 复用已有密钥，或创建专用于该设备的密钥。通过已经认证的 SSH/SFTP 连接，将公钥去重追加到对应远端用户的 `~/.ssh/authorized_keys`，保留已有内容，目录权限 700、文件权限 600。私钥留在主机，不能上传。
 
-USB 场景可读取本仓库 `dump.py` 的 `resolve_ssh_options` 和 `connect_ssh`，用 `frida.get_usb_device(timeout=10)` 获取设备，复用 `connect_ssh(..., use_usb=True)` 建立 Paramiko 连接，再执行配置或使用 SFTP。按当前函数签名调用，结束时关闭 SSH 客户端和返回的 USB forwarder。不为配置密钥引入本机端口转发依赖。
+USB 场景可读取本仓库 `dump.py` 的 `resolve_ssh_options` 和 `connect_ssh`，复用已选定的设备对象建立 `connect_ssh(..., use_usb=True)` 连接，再执行配置或使用 SFTP。需要重新获取设备时，用户指定过 ID 就调用 `get_frida_device(device_id=DEVICE_ID)`；仅在未指定设备时使用默认 USB 选择。配置公钥、独立登录验证、枚举和导出必须沿用同一设备或 ID，获取失败不得回退到默认设备。按当前函数签名调用，结束时关闭 SSH 客户端和返回的 USB forwarder。不为配置密钥引入本机端口转发依赖。
 
 配置后用 `password=None`、`allow_agent=False`、`look_for_keys=False` 和指定私钥建立一次独立连接，确认成功来自该密钥，再报告免密可用。不要关闭设备密码登录或替换其他公钥。
 
@@ -103,6 +110,8 @@ USB 场景可读取本仓库 `dump.py` 的 `resolve_ssh_options` 和 `connect_ss
 ```sh
 ./.venv/bin/python dump.py -H iphone -o './exported-app.ipa' 'BUNDLE_ID'
 ```
+
+排查卡住时加 `-v` 查看连接、spawn/attach、agent 编译/加载、下载和打包阶段。慢设备可按实际错误调整 `--agent-timeout SECONDS`（等待下一条 agent 消息，默认 120）或 `--transfer-timeout SECONDS`（SCP/SFTP 的 I/O 等待，默认 60，包含 SFTP 通道建立与初始化、扫描、下载和临时文件清理）。这些参数不是总导出时限，也不控制 Frida 的 spawn/attach 或 agent 编译/加载超时，不应将延长等待当作这些问题的修复。诊断输出不要附加密码或密钥内容。
 
 没有别名时省略 `-H iphone`，其他 SSH 参数按已验证的配置添加。
 

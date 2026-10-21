@@ -21,6 +21,9 @@ import dump
 
 class DumpTests(unittest.TestCase):
     def setUp(self):
+        sftp_patch = patch.object(dump, 'open_sftp')
+        self.open_sftp = sftp_patch.start()
+        self.addCleanup(sftp_patch.stop)
         dump.dump_error = None
         dump.finished.clear()
         dump.file_dict.clear()
@@ -69,7 +72,7 @@ class DumpTests(unittest.TestCase):
                         entry.st_mode = stat.S_IFREG | 0o755
                 return entries
 
-            def open_sftp():
+            def open_sftp(_ssh):
                 client = Mock()
                 client.listdir_attr.side_effect = list_directory
                 client.readlink.return_value = 'Info.plist'
@@ -78,7 +81,7 @@ class DumpTests(unittest.TestCase):
                 return client
 
             ssh = Mock()
-            ssh.open_sftp.side_effect = open_sftp
+            self.open_sftp.side_effect = open_sftp
             received = []
             totals = []
             scanned = []
@@ -130,7 +133,7 @@ class DumpTests(unittest.TestCase):
         listing.listdir_attr.side_effect = list_directory
         worker.get.side_effect = get
         ssh = Mock()
-        ssh.open_sftp.side_effect = [listing, worker]
+        self.open_sftp.side_effect = [listing, worker]
         totals, received = [], []
         with tempfile.TemporaryDirectory() as directory:
             dump.download_app(ssh, '/Test.app', directory, [], received.append, set_total=totals.append)
@@ -160,7 +163,7 @@ class DumpTests(unittest.TestCase):
             Path(local).write_bytes(contents[remote])
             callback(len(contents[remote]), len(contents[remote]))
 
-        def open_sftp():
+        def open_sftp(_ssh):
             client = Mock()
             client.listdir_attr.side_effect = lambda remote: tree[remote]
             client.readlink.side_effect = lambda remote: links[remote]
@@ -168,7 +171,7 @@ class DumpTests(unittest.TestCase):
             return client
 
         ssh = Mock()
-        ssh.open_sftp.side_effect = open_sftp
+        self.open_sftp.side_effect = open_sftp
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             payload = root / 'Payload'
@@ -204,7 +207,7 @@ class DumpTests(unittest.TestCase):
         sftp = Mock()
         sftp.listdir_attr.side_effect = OSError('connection lost')
         ssh = Mock()
-        ssh.open_sftp.return_value = sftp
+        self.open_sftp.return_value = sftp
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(OSError, 'connection lost'):
                 dump.download_app(ssh, '/Test.app', directory, [], Mock())
@@ -219,7 +222,7 @@ class DumpTests(unittest.TestCase):
         listing.listdir_attr.return_value = [entry]
         worker.get.side_effect = OSError('file download failed')
         ssh = Mock()
-        ssh.open_sftp.side_effect = [listing, worker]
+        self.open_sftp.side_effect = [listing, worker]
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(OSError, 'file download failed'):
                 dump.download_app(ssh, '/Test.app', directory, [], Mock())
@@ -388,7 +391,7 @@ class DumpTests(unittest.TestCase):
         file_entry.filename, file_entry.st_mode, file_entry.st_size = 'resource', stat.S_IFREG | 0o644, 1
         subdir.filename, subdir.st_mode = 'Subdir', stat.S_IFDIR | 0o755
         listing, worker, ssh = Mock(), Mock(), Mock()
-        ssh.open_sftp.side_effect = [listing, worker]
+        self.open_sftp.side_effect = [listing, worker]
         ssh.close.side_effect = closed.set
 
         def list_directory(path):
@@ -411,7 +414,7 @@ class DumpTests(unittest.TestCase):
 
     def test_interrupt_during_scan_preserves_keyboard_interrupt(self):
         listing, ssh = Mock(), Mock()
-        ssh.open_sftp.return_value = listing
+        self.open_sftp.return_value = listing
         listing.listdir_attr.side_effect = KeyboardInterrupt()
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaises(KeyboardInterrupt):
@@ -655,9 +658,9 @@ class DumpTests(unittest.TestCase):
                 self.assertEqual(dump.file_dict['frida-ios-dump-task-0.fid'], 'First/Shared')
                 self.assertEqual(dump.file_dict['frida-ios-dump-task-1.fid'], 'Second/Shared')
                 dump.generate_ipa(str(payload), str(root / 'output'))
-            removed = [call.args[0] for call in ssh.open_sftp.return_value.remove.call_args_list]
+            removed = [call.args[0] for call in self.open_sftp.return_value.remove.call_args_list]
             self.assertCountEqual(removed, list(content))
-            self.assertEqual(ssh.open_sftp.return_value.close.call_count, 2)
+            self.assertEqual(self.open_sftp.return_value.close.call_count, 2)
             with zipfile.ZipFile(root / 'output.ipa') as archive:
                 self.assertEqual(archive.read('Payload/Example.app/First/Shared'), content[entries[0]['dump']])
                 self.assertEqual(archive.read('Payload/Example.app/Second/Shared'), content[entries[1]['dump']])

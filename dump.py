@@ -22,6 +22,8 @@ import stat
 import posixpath
 import time
 import zipfile
+import math
+from urllib.parse import urlsplit
 from concurrent.futures import ThreadPoolExecutor
 
 script_dir = os.path.dirname(os.path.realpath(__file__))
@@ -40,6 +42,9 @@ PAYLOAD_PATH = os.path.join(TEMP_DIR, PAYLOAD_DIR)
 file_dict = {}
 bundle_metadata = {}
 IS_WINDOWS = sys.platform == 'win32'
+TRANSFER_TIMEOUT = 60
+AGENT_TIMEOUT = 120
+VERBOSE = False
 
 finished = threading.Event()
 dump_error = None
@@ -49,6 +54,48 @@ message_queue = queue.Queue()
 def get_usb_iphone():
     print('Waiting for USB device...')
     return frida.get_usb_device(timeout=10)
+
+
+def debug(message):
+    if VERBOSE:
+        tqdm.write('[debug] ' + message)
+
+
+def positive_seconds(value):
+    try:
+        seconds = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError('timeout must be a positive number of seconds')
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise argparse.ArgumentTypeError('timeout must be a finite positive number of seconds')
+    return seconds
+
+
+def remote_endpoint(value):
+    try:
+        endpoint = urlsplit('//' + value)
+        if (not endpoint.hostname or endpoint.username is not None or
+                endpoint.password is not None or endpoint.path or endpoint.query or
+                endpoint.fragment or (endpoint.port is not None and not 1 <= endpoint.port <= 65535)):
+            raise ValueError()
+    except ValueError:
+        raise argparse.ArgumentTypeError('remote must be HOST[:PORT], using [IPv6]:PORT for IPv6')
+    return value
+
+
+def get_frida_device(remote=None, device_id=None):
+    if remote:
+        print('Connecting to remote Frida at {}...'.format(remote))
+        device = frida.get_device_manager().add_remote_device(remote)
+    elif device_id:
+        print('Waiting for USB device {}...'.format(device_id))
+        device = frida.get_device(device_id, timeout=10)
+        if device.type != 'usb':
+            raise ValueError('--device-id must identify a USB device')
+    else:
+        device = get_usb_iphone()
+    debug('Frida device: {} ({}, {})'.format(device.name, device.id, device.type))
+    return device
 
 
 class USBSSHForwarder:
@@ -107,7 +154,8 @@ class USBSSHForwarder:
 
 
 def resolve_ssh_options(args, config_path=None):
-    host = args.ssh_host or Host
+    remote = getattr(args, 'remote', None)
+    host = args.ssh_host or (urlsplit('//' + remote).hostname if remote else Host)
     config = {}
     config_path = config_path or os.path.expanduser('~/.ssh/config')
     if os.path.isfile(config_path):
@@ -119,7 +167,7 @@ def resolve_ssh_options(args, config_path=None):
     password = args.ssh_password if args.ssh_password is not None else Password
     transport = getattr(args, 'ssh_transport', 'auto')
     if transport == 'auto':
-        use_usb = not args.ssh_host or hostname.lower() in ('localhost', '127.0.0.1', '::1')
+        use_usb = not remote and (not args.ssh_host or hostname.lower() in ('localhost', '127.0.0.1', '::1'))
     else:
         use_usb = transport == 'usb'
     return dict(host=hostname, port=port, username=args.ssh_user or config.get('user', User),
@@ -128,15 +176,18 @@ def resolve_ssh_options(args, config_path=None):
 
 
 def connect_ssh(ssh, device, host, port, username, password, key_filename, use_usb=False):
+    debug('Connecting SSH using {} on port {}'.format('USB' if use_usb else 'TCP', port))
     options = dict(port=port, username=username, password=password,
                    key_filename=key_filename, timeout=10)
     if not use_usb:
         ssh.connect(host, **options)
+        debug('SSH connected')
         return None
     print('Connecting to device SSH over USB...')
     forwarder = USBSSHForwarder(device, port=port)
     try:
         ssh.connect(host, sock=forwarder.socket, **options)
+        debug('SSH connected')
     except BaseException:
         forwarder.close()
         raise
@@ -188,6 +239,7 @@ def write_ipa(payload_path, archive_path):
 
 
 def generate_ipa(path, display_name):
+    debug('Packaging IPA')
     ipa_filename = display_name + '.ipa'
 
     print('Generating "{}"'.format(ipa_filename))
@@ -215,6 +267,7 @@ def generate_ipa(path, display_name):
         os.replace(archive_path, output_path)
     shutil.rmtree(PAYLOAD_PATH)
     bundle_metadata.clear()
+    debug('IPA written and temporary payload removed')
 
 
 def on_message(message, data):
@@ -247,6 +300,33 @@ def abort_downloads(executor, ssh_client):
             pass
 
 
+def open_sftp(ssh_client):
+    """Bound channel creation, subsystem acknowledgement and version negotiation."""
+    channel = ssh_client.get_transport().open_session(timeout=TRANSFER_TIMEOUT)
+    timed_out = threading.Event()
+
+    def expire():
+        timed_out.set()
+        channel.close()
+
+    deadline = threading.Timer(TRANSFER_TIMEOUT, expire)
+    deadline.daemon = True
+    try:
+        channel.settimeout(TRANSFER_TIMEOUT)
+        deadline.start()
+        # Paramiko's subsystem acknowledgement wait ignores channel.settimeout().
+        channel.invoke_subsystem('sftp')
+        return paramiko.SFTPClient(channel)
+    except BaseException as error:
+        channel.close()
+        if isinstance(error, Exception) and timed_out.is_set():
+            raise socket.timeout('SFTP initialization timed out after {:g} seconds'.format(
+                TRANSFER_TIMEOUT)) from error
+        raise
+    finally:
+        deadline.cancel()
+
+
 def download_app(ssh_client, app_path, destination, excluded, progress, set_total=None,
                  scan_progress=None):
     """Download bundle resources over SFTP, skipping already dumped binaries."""
@@ -255,7 +335,7 @@ def download_app(ssh_client, app_path, destination, excluded, progress, set_tota
     archive_root = posixpath.join(PAYLOAD_DIR, posixpath.basename(app_path))
     bundle_metadata[archive_root] = {'mode': stat.S_IFDIR | 0o755}
     excluded = set(excluded)
-    sftp = ssh_client.open_sftp()
+    sftp = open_sftp(ssh_client)
     futures = []
     total_size = 0
     directories = []
@@ -307,10 +387,9 @@ def download_app(ssh_client, app_path, destination, excluded, progress, set_tota
     def copy_file(item):
         remote_path, local_path, entry = item
         if not hasattr(worker_state, 'sftp'):
-            client = ssh_client.open_sftp()
+            client = open_sftp(ssh_client)
             with progress_lock:
                 worker_clients.append(client)
-            client.get_channel().settimeout(60)
             worker_state.sftp = client
         last_sent = [0]
 
@@ -327,7 +406,6 @@ def download_app(ssh_client, app_path, destination, excluded, progress, set_tota
 
     executor = None
     try:
-        sftp.get_channel().settimeout(60)
         executor = ThreadPoolExecutor(max_workers=4)
         copy_directory(app_path, local_app)
         if set_total is not None:
@@ -389,7 +467,7 @@ def handle_payload(payload):
             scp_from = dump_path
             scp_to = PAYLOAD_PATH + '/'
 
-            with SCPClient(ssh.get_transport(), progress = progress, socket_timeout = 60) as scp:
+            with SCPClient(ssh.get_transport(), progress=progress, socket_timeout=TRANSFER_TIMEOUT) as scp:
                 scp.get(scp_from, scp_to)
 
             chmod_dir = os.path.join(PAYLOAD_PATH, os.path.basename(dump_path))
@@ -401,8 +479,7 @@ def handle_payload(payload):
             if re.fullmatch(r'frida-ios-dump-[A-Za-z0-9-]+\.fid', posixpath.basename(dump_path)):
                 cleanup_sftp = None
                 try:
-                    cleanup_sftp = ssh.open_sftp()
-                    cleanup_sftp.get_channel().settimeout(60)
+                    cleanup_sftp = open_sftp(ssh)
                     cleanup_sftp.remove(dump_path)
                 except Exception as error:
                     tqdm.write('Could not remove temporary dump {}: {}'.format(dump_path, error))
@@ -492,6 +569,7 @@ def cmp_to_key(mycmp):
 
 
 def get_applications(device):
+    debug('Enumerating applications')
     try:
         applications = device.enumerate_applications()
     except Exception as e:
@@ -525,16 +603,21 @@ def list_applications(device):
             print(line_format % (application.pid, application.name, application.identifier))
 
 
-def load_js_file(session, filename):
+def load_js_file(session, filename, source_maps='included'):
+    debug('Compiling Frida agent (source maps: {})'.format(source_maps))
     bridge_path = os.path.join(script_dir, 'node_modules', 'frida-objc-bridge')
     if not os.path.isdir(bridge_path):
         raise RuntimeError('Missing frida-objc-bridge. Run npm install in {}'.format(script_dir))
     compiler = frida.Compiler()
     compiler.on('diagnostics', lambda diagnostics: print('Agent diagnostics:', diagnostics))
-    source = compiler.build(os.path.basename(filename), project_root=os.path.dirname(filename))
+    source = compiler.build(os.path.basename(filename), project_root=os.path.dirname(filename),
+                            source_maps=source_maps)
+    debug('Compiled agent size: {} bytes'.format(len(source.encode('utf-8'))))
+    debug('Creating and loading Frida agent')
     script = session.create_script(source)
     script.on('message', on_message)
     script.load()
+    debug('Frida agent loaded')
 
     return script
 
@@ -566,18 +649,23 @@ def open_target_app(device, name_or_bundleid):
     if not bundle_identifier:
         raise ValueError('Application not found: {}'.format(name_or_bundleid))
     if not pid:
+        debug('Spawning {}'.format(bundle_identifier))
         pid = device.spawn([bundle_identifier])
         try:
+            debug('Attaching to PID {}'.format(pid))
             session = device.attach(pid)
         finally:
+            debug('Resuming PID {}'.format(pid))
             device.resume(pid)
     else:
+        debug('Attaching to running PID {}'.format(pid))
         session = device.attach(pid)
 
+    debug('Target session attached')
     return session, display_name, bundle_identifier
 
 
-def start_dump(session, ipa_name, ssh_client=None):
+def start_dump(session, ipa_name, ssh_client=None, source_maps='included'):
     global dump_error, message_queue
     print('Dumping {} to {}'.format(ipa_name, TEMP_DIR))
     finished.clear()
@@ -605,14 +693,17 @@ def start_dump(session, ipa_name, ssh_client=None):
 
     session.on('detached', on_detached)
     try:
-        script = load_js_file(session, DUMP_JS)
+        script = load_js_file(session, DUMP_JS, source_maps=source_maps)
         if not finished.is_set():
+            debug('Requesting dump; agent silence timeout: {}s, transfer I/O timeout: {}s'.format(
+                AGENT_TIMEOUT, TRANSFER_TIMEOUT))
             script.post('dump')
         while not finished.is_set():
             try:
-                message, data = message_queue.get(timeout=120)
+                message, data = message_queue.get(timeout=AGENT_TIMEOUT)
             except queue.Empty:
-                raise RuntimeError('No response from the dump agent for 120 seconds. Keep the device unlocked.')
+                raise RuntimeError('No response from the dump agent for {:g} seconds. '
+                                   'Keep the device unlocked; use --agent-timeout to allow more time.'.format(AGENT_TIMEOUT))
             if download_errors:
                 raise download_errors[0]
             if isinstance(message, BaseException):
@@ -624,6 +715,8 @@ def start_dump(session, ipa_name, ssh_client=None):
                 future.add_done_callback(download_finished)
                 continue
             if 'app' in payload or 'done' in payload:
+                debug('Waiting for binary downloads before processing {}'.format(
+                    'resources' if 'app' in payload else 'completion'))
                 # Resource exclusions and packaging need every completed dump mapping.
                 for future in pending_downloads:
                     future.result()
@@ -638,10 +731,14 @@ def start_dump(session, ipa_name, ssh_client=None):
             raise primary_error
         raise
     finally:
+        debug('Stopping binary download workers')
         download_pool.shutdown(wait=True, cancel_futures=True)
+        debug('Removing target session handler')
         session.off('detached', on_detached)
         if not session.is_detached:
+            debug('Detaching target session')
             session.detach()
+        debug('Target session released')
 
 
 
@@ -649,16 +746,28 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='frida-ios-dump (by AloneMonkey, Frida 17+)')
     parser.add_argument('-l', '--list', dest='list_applications', action='store_true', help='List the installed apps')
     parser.add_argument('-o', '--output', dest='output_ipa', help='Specify name of the decrypted IPA')
+    connection = parser.add_mutually_exclusive_group()
+    connection.add_argument('-R', '--remote', type=remote_endpoint, metavar='HOST[:PORT]',
+                            help='Connect to remote Frida instead of USB (default port 27042)')
+    connection.add_argument('-D', '--device-id', help='Select a USB device ID (see frida-ls-devices)')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Show connection, attach and dump stage diagnostics')
+    parser.add_argument('--agent-timeout', type=positive_seconds, default=120, metavar='SECONDS',
+                        help='Timeout while waiting for the next agent message (default: 120)')
+    parser.add_argument('--transfer-timeout', type=positive_seconds, default=60, metavar='SECONDS',
+                        help='SCP/SFTP I/O timeout, not a total download limit (default: 60)')
     parser.add_argument('-H', '--host', dest='ssh_host', help='SSH hostname or alias from ~/.ssh/config')
     parser.add_argument('-p', '--port', dest='ssh_port', help='Specify SSH port')
     parser.add_argument('--ssh-transport', choices=('auto', 'usb', 'tcp'), default='auto',
-                        help='SSH transport: auto uses USB for localhost and TCP for remote hosts')
+                        help='SSH transport: auto uses USB for local SSH with USB Frida, otherwise TCP')
     parser.add_argument('-u', '--user', dest='ssh_user', help='Specify SSH username')
     parser.add_argument('-P', '--password', dest='ssh_password', help='Specify SSH password')
     parser.add_argument('-K', '--key_filename', dest='ssh_key_filename', help='Specify SSH private key file path')
     parser.add_argument('target', nargs='?', help='Bundle identifier or display name of the target app')
 
     args = parser.parse_args()
+    VERBOSE = args.verbose
+    AGENT_TIMEOUT = args.agent_timeout
+    TRANSFER_TIMEOUT = args.transfer_timeout
 
     exit_code = 0
     ssh = None
@@ -671,11 +780,15 @@ if __name__ == '__main__':
 
     if not args.list_applications and not args.target:
         parser.error('target is required unless --list is specified')
+    if args.device_id is not None and not args.device_id.strip():
+        parser.error('--device-id must not be empty')
+    if args.remote and args.ssh_transport == 'usb':
+        parser.error('--remote cannot be combined with --ssh-transport usb; use TCP SSH')
 
     try:
-        device = get_usb_iphone()
+        device = get_frida_device(args.remote, args.device_id)
     except Exception as e:
-        sys.exit('Failed to connect to USB device: {}'.format(e))
+        sys.exit('Failed to connect to {} device: {}'.format('remote Frida' if args.remote else 'USB', e))
 
     if args.list_applications:
         list_applications(device)
@@ -697,7 +810,9 @@ if __name__ == '__main__':
                 output_ipa = display_name
             output_ipa = re.sub(r'\.ipa$', '', output_ipa)
             if session:
-                start_dump(session, output_ipa, ssh_client=ssh)
+                # Keep remote script requests small; retain USB debugging metadata.
+                start_dump(session, output_ipa, ssh_client=ssh,
+                           source_maps='omitted' if args.remote else 'included')
         except KeyboardInterrupt:
             print('\nInterrupted; downloads cancelled.')
             exit_code = 130
@@ -716,13 +831,17 @@ if __name__ == '__main__':
 
     try:
         if ssh:
+            debug('Closing SSH connection')
             ssh.close()
     finally:
         try:
             if usb_ssh:
+                debug('Closing USB SSH channel')
                 usb_ssh.close()
         finally:
             if workspace is not None:
+                debug('Cleaning temporary workspace')
                 workspace.cleanup()
+    debug('Cleanup complete')
 
     sys.exit(exit_code)
