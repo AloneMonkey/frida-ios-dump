@@ -153,13 +153,9 @@ node tests/test_agent_temp.js
 
 If the problem persists, open an issue with the full error output, iOS version, and host/device Frida versions. Remove passwords and other private information from the logs.
 
-## 认识更多同行 · 新识 HiNexus
+## 个人博客
 
-除了分享代码，也欢迎来我做的社群网站 [新识 HiNexus](https://hinexus.me) 认识更多有趣的人。
-
-免费创建你的职业个人主页，展示经历、专业方向、能提供的帮助和正在寻找的合作，让志同道合的人更容易找到你。无论你关注移动安全、逆向工程、独立开发还是 AI，都欢迎来介绍自己、交流想法、寻找合作伙伴。
-
-**[来新识，认识一下 →](https://hinexus.me)**
+欢迎访问我的个人博客 [AloneMonkey](https://www.alonemonkey.com)，阅读更多技术文章与实践分享。
 
 ## 关注公众号 · 添加个人微信
 
