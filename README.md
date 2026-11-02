@@ -164,3 +164,10 @@ If the problem persists, open an issue with the full error output, iOS version, 
 | 个人微信 · AloneMonkey | 微信公众号 |
 | :---: | :---: |
 | <img src="assets/wechat-personal.jpg" alt="AloneMonkey 个人微信二维码" width="280" /> | <img src="assets/wechat-official-account.png" alt="微信公众号关注二维码" width="280" /> |
+
+<a href="https://hotrepo.ai/zh/AloneMonkey/frida-ios-dump?utm_source=github-readme&utm_medium=chart">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://hotrepo.ai/AloneMonkey/frida-ios-dump/star-history.svg?style=avatar&lang=zh&theme=dark">
+    <img alt="AloneMonkey/frida-ios-dump 的 Star 增长" src="https://hotrepo.ai/AloneMonkey/frida-ios-dump/star-history.svg?style=avatar&lang=zh">
+  </picture>
+</a>
