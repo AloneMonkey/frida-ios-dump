@@ -1,0 +1,33 @@
+[tool.poetry]
+name = "frida-ios-dump"
+version = "0.1.0"
+description = ""
+authors = ["Larry Moore"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.13"
+cffi = "^1.17.1"
+colorama = "^0.4.6"
+cryptography = "^43.0.3"
+enum34 = "^1.1.10"
+frida-tools = "^13.6.0"
+idna = "^3.10"
+ipaddress = "^1.0.23"
+paramiko = "^3.5.0"
+prompt-toolkit = "^3.0.48"
+pyasn1 = "^0.6.1"
+pycparser = "^2.22"
+pygments = "^2.18.0"
+pynacl = "^1.5.0"
+scp = "^0.15.0"
+six = "^1.16.0"
+tqdm = "^4.67.0"
+wcwidth = "^0.2.13"
+asn1crypto = "^1.5.1"
+bcrypt = "^4.2.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
